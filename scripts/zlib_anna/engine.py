@@ -20,7 +20,7 @@ from urllib.parse import unquote, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from . import SCHEMA_VERSION, SKILL_VERSION, annas_archive
+from . import SKILL_VERSION, annas_archive, schema
 from .network_safety import (
     ALLOW_INSECURE_HTTP_ENV,
     LEGACY_ALLOW_INSECURE_HTTP_ENV,
@@ -176,16 +176,13 @@ class SkillError(Exception):
         self.exit_code = exit_code
 
     def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "code": self.code,
-            "message": self.message,
-            "recoverable": self.recoverable,
-        }
-        if self.suggestions:
-            payload["suggestions"] = self.suggestions
-        if self.details:
-            payload["details"] = self.details
-        return payload
+        return schema.error_object(
+            code=self.code,
+            message=self.message,
+            recoverable=self.recoverable,
+            suggestions=self.suggestions,
+            details=self.details,
+        )
 
 
 @dataclass
@@ -231,21 +228,17 @@ def fail(code: str, message: str, **kwargs: Any) -> None:
 
 
 def ok_payload(**kwargs: Any) -> dict[str, Any]:
-    return {
-        "ok": True,
-        "schema_version": SCHEMA_VERSION,
-        "skill_version": SKILL_VERSION,
-        **kwargs,
-    }
+    return schema.success_envelope(**kwargs)
 
 
 def error_payload(error: SkillError) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "schema_version": SCHEMA_VERSION,
-        "skill_version": SKILL_VERSION,
-        "error": error.to_dict(),
-    }
+    return schema.failure_envelope(
+        code=error.code,
+        message=error.message,
+        recoverable=error.recoverable,
+        suggestions=error.suggestions,
+        details=error.details,
+    )
 
 
 def display_path(path: Path) -> str:

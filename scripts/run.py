@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from zlib_anna import SCHEMA_VERSION, SKILL_VERSION
+from zlib_anna import SKILL_VERSION, schema
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 LOCK_FILE = SCRIPTS_DIR / "requirements.lock"
@@ -196,21 +196,16 @@ def ensure_runtime() -> Path:
 
 
 def runtime_error_payload(error: RuntimeSetupError) -> dict[str, object]:
-    return {
-        "ok": False,
-        "schema_version": SCHEMA_VERSION,
-        "skill_version": SKILL_VERSION,
-        "error": {
-            "code": "RUNTIME_SETUP_FAILED",
-            "message": "The bundled Skill runtime could not be prepared.",
-            "recoverable": True,
-            "suggestions": [
-                "Check that Python 3.9+ can create virtual environments.",
-                "Check network access to the configured Python package index, then retry.",
-            ],
-            "details": {"step": error.step, "error_type": error.error_type},
-        },
-    }
+    return schema.failure_envelope(
+        code="RUNTIME_SETUP_FAILED",
+        message="The bundled Skill runtime could not be prepared.",
+        recoverable=True,
+        suggestions=[
+            "Check that Python 3.9+ can create virtual environments.",
+            "Check network access to the configured Python package index, then retry.",
+        ],
+        details={"step": error.step, "error_type": error.error_type},
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

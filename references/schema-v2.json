@@ -1,0 +1,522 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openai.local/zlib-skill/schema-v2.json",
+  "$ref": "#/$defs/publicResponse",
+  "$defs": {
+    "envelope": {
+      "type": "object",
+      "required": ["ok", "schema_version", "skill_version"],
+      "properties": {
+        "ok": {"type": "boolean"},
+        "schema_version": {"const": "2"},
+        "skill_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "recoverable"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1},
+        "recoverable": {"type": "boolean"},
+        "suggestions": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "details": {"type": "object"}
+      }
+    },
+    "errorEnvelope": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": ["error"],
+          "properties": {
+            "ok": {"const": false},
+            "error": {"$ref": "#/$defs/error"}
+          }
+        }
+      ]
+    },
+    "sourceStatus": {
+      "type": "object",
+      "required": [
+        "source",
+        "available",
+        "authenticated",
+        "can_search",
+        "can_download",
+        "can_attempt_download",
+        "status"
+      ],
+      "properties": {
+        "source": {"type": "string", "enum": ["zlib", "anna"]},
+        "available": {"type": "boolean"},
+        "authenticated": {"type": "boolean"},
+        "can_search": {"type": "boolean"},
+        "can_download": {"type": "boolean"},
+        "can_attempt_download": {"type": "boolean"},
+        "status": {"type": "string", "minLength": 1},
+        "message": {"type": "string"},
+        "details": {"type": "object"}
+      }
+    },
+    "authStatusResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": [
+            "config_dir",
+            "config_file",
+            "config_dir_exists",
+            "config_file_exists",
+            "config_dir_mode",
+            "config_file_mode",
+            "zlib",
+            "anna"
+          ],
+          "properties": {
+            "ok": {"const": true},
+            "config_dir": {"type": "string"},
+            "config_file": {"type": "string"},
+            "config_dir_exists": {"type": "boolean"},
+            "config_file_exists": {"type": "boolean"},
+            "config_dir_mode": {"type": ["string", "null"]},
+            "config_file_mode": {"type": ["string", "null"]},
+            "zlib": {
+              "type": "object",
+              "required": ["has_token", "email", "domain", "domain_trusted", "domain_env"],
+              "properties": {
+                "has_token": {"type": "boolean"},
+                "email": {"type": ["string", "null"]},
+                "domain": {"type": ["string", "null"]},
+                "domain_trusted": {"type": "boolean"},
+                "domain_env": {"type": ["string", "null"]}
+              }
+            },
+            "anna": {
+              "type": "object",
+              "required": ["base_origin", "candidate_origins"],
+              "properties": {
+                "base_origin": {"type": ["string", "null"]},
+                "candidate_origins": {
+                  "type": "array",
+                  "items": {"type": "string"}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "authSessionResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": ["source", "authenticated", "config_file"],
+          "properties": {
+            "ok": {"const": true},
+            "source": {"const": "zlib"},
+            "authenticated": {"type": "boolean"},
+            "config_file": {"type": "string"},
+            "config_file_mode": {"type": ["string", "null"]},
+            "user": {"type": "object"},
+            "domain": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "authResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/authStatusResponse"},
+        {"$ref": "#/$defs/authSessionResponse"},
+        {"$ref": "#/$defs/errorEnvelope"}
+      ]
+    },
+    "searchResult": {
+      "type": "object",
+      "required": [
+        "result_id",
+        "source",
+        "title",
+        "author",
+        "can_download",
+        "can_attempt_download",
+        "requires_account"
+      ],
+      "properties": {
+        "result_id": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "enum": ["zlib", "anna"]},
+        "title": {"type": "string"},
+        "author": {"type": "string"},
+        "year": {},
+        "language": {},
+        "extension": {},
+        "size": {},
+        "can_download": {"type": "boolean"},
+        "can_attempt_download": {"type": "boolean"},
+        "requires_account": {"type": "boolean"}
+      }
+    },
+    "searchSuccessResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": ["query", "count", "results", "sources"],
+          "properties": {
+            "ok": {"const": true},
+            "query": {"type": "string"},
+            "count": {"type": "integer", "minimum": 0},
+            "results": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/searchResult"}
+            },
+            "sources": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/sourceStatus"}
+            }
+          }
+        }
+      ]
+    },
+    "searchResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/searchSuccessResponse"},
+        {"$ref": "#/$defs/errorEnvelope"}
+      ]
+    },
+    "resolveZlibResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": ["source", "result_id", "book"],
+          "properties": {
+            "ok": {"const": true},
+            "source": {"const": "zlib"},
+            "result_id": {"type": "string", "pattern": "^zlib:"},
+            "book": {"type": "object"}
+          }
+        }
+      ]
+    },
+    "resolveAnnaResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": ["source", "result_id", "detail_url", "links"],
+          "properties": {
+            "ok": {"const": true},
+            "source": {"const": "anna"},
+            "result_id": {"type": "string", "pattern": "^anna:"},
+            "detail_url": {"type": ["string", "null"]},
+            "links": {"type": "object"}
+          }
+        }
+      ]
+    },
+    "resolveResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/resolveZlibResponse"},
+        {"$ref": "#/$defs/resolveAnnaResponse"},
+        {"$ref": "#/$defs/errorEnvelope"}
+      ]
+    },
+    "downloadSuccessResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": [
+            "downloaded",
+            "source",
+            "result_id",
+            "path",
+            "size",
+            "elapsed_seconds"
+          ],
+          "properties": {
+            "ok": {"const": true},
+            "downloaded": {"const": true},
+            "source": {"type": "string", "enum": ["zlib", "anna"]},
+            "result_id": {"type": "string", "minLength": 1},
+            "path": {"type": "string", "minLength": 1},
+            "size": {"type": "integer", "minimum": 1},
+            "elapsed_seconds": {"type": "number", "minimum": 0},
+            "book": {"type": "object"},
+            "detail_url": {"type": ["string", "null"]},
+            "link_kind": {"type": "string"},
+            "start_origin": {"type": "string"},
+            "final_origin": {"type": "string"},
+            "md5": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "downloadResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/downloadSuccessResponse"},
+        {"$ref": "#/$defs/errorEnvelope"}
+      ]
+    },
+    "accountSuccessResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": ["user", "domain"],
+          "properties": {
+            "ok": {"const": true},
+            "domain": {"type": "string", "minLength": 1},
+            "user": {
+              "type": "object",
+              "required": [
+                "name",
+                "email",
+                "kindle_email",
+                "downloads_today",
+                "downloads_limit",
+                "downloads_left"
+              ],
+              "properties": {
+                "name": {"type": ["string", "null"]},
+                "email": {"type": ["string", "null"]},
+                "kindle_email": {"type": ["string", "null"]},
+                "downloads_today": {"type": "integer"},
+                "downloads_limit": {"type": "integer"},
+                "downloads_left": {"type": "integer"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "accountResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/accountSuccessResponse"},
+        {"$ref": "#/$defs/errorEnvelope"}
+      ]
+    },
+    "domainsSuccessResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": ["domains", "count", "source"],
+          "properties": {
+            "ok": {"const": true},
+            "domains": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["domain", "available"],
+                "properties": {
+                  "domain": {"type": "string", "minLength": 1},
+                  "available": {"type": "boolean"}
+                }
+              }
+            },
+            "count": {"type": "integer", "minimum": 0},
+            "source": {"type": "string", "enum": ["discovered", "fallback"]}
+          }
+        }
+      ]
+    },
+    "domainsResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/domainsSuccessResponse"},
+        {"$ref": "#/$defs/errorEnvelope"}
+      ]
+    },
+    "popularSuccessResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": ["count", "results", "source"],
+          "properties": {
+            "ok": {"const": true},
+            "count": {"type": "integer", "minimum": 0},
+            "results": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/searchResult"}
+            },
+            "source": {"const": "zlib"}
+          }
+        }
+      ]
+    },
+    "popularResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/popularSuccessResponse"},
+        {"$ref": "#/$defs/errorEnvelope"}
+      ]
+    },
+    "doctorSuccessResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": ["config", "sources", "proxy", "download_dir"],
+          "properties": {
+            "ok": {"const": true},
+            "config": {"type": "object"},
+            "sources": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/sourceStatus"}
+            },
+            "proxy": {
+              "type": "object",
+              "required": ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"],
+              "properties": {
+                "HTTPS_PROXY": {"type": "boolean"},
+                "HTTP_PROXY": {"type": "boolean"},
+                "ALL_PROXY": {"type": "boolean"}
+              }
+            },
+            "download_dir": {
+              "type": "object",
+              "required": [
+                "path",
+                "exists",
+                "writable",
+                "parent",
+                "parent_exists",
+                "parent_writable",
+                "nearest_existing_parent",
+                "creatable"
+              ],
+              "properties": {
+                "path": {"type": "string"},
+                "exists": {"type": "boolean"},
+                "writable": {"type": "boolean"},
+                "parent": {"type": "string"},
+                "parent_exists": {"type": "boolean"},
+                "parent_writable": {"type": "boolean"},
+                "nearest_existing_parent": {"type": "string"},
+                "creatable": {"type": "boolean"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "doctorResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/doctorSuccessResponse"},
+        {"$ref": "#/$defs/errorEnvelope"}
+      ]
+    },
+    "batchItem": {
+      "allOf": [
+        {
+          "type": "object",
+          "required": ["index", "input"],
+          "properties": {
+            "index": {"type": "integer", "minimum": 1},
+            "input": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["result"],
+              "properties": {
+                "result": {"$ref": "#/$defs/downloadSuccessResponse"}
+              }
+            },
+            {
+              "type": "object",
+              "required": ["error"],
+              "properties": {
+                "error": {"$ref": "#/$defs/error"}
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "batchSuccessResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/envelope"},
+        {
+          "type": "object",
+          "required": ["count", "success_count", "fail_count", "results"],
+          "properties": {
+            "ok": {"const": true},
+            "count": {"type": "integer", "minimum": 1},
+            "success_count": {"type": "integer", "minimum": 0},
+            "fail_count": {"type": "integer", "minimum": 0},
+            "results": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/batchItem"}
+            }
+          }
+        }
+      ]
+    },
+    "batchResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/batchSuccessResponse"},
+        {"$ref": "#/$defs/errorEnvelope"}
+      ]
+    },
+    "runnerSetupError": {
+      "allOf": [
+        {"$ref": "#/$defs/error"},
+        {
+          "type": "object",
+          "required": ["details"],
+          "properties": {
+            "code": {"const": "RUNTIME_SETUP_FAILED"},
+            "details": {
+              "type": "object",
+              "required": ["step", "error_type"],
+              "properties": {
+                "step": {"type": "string", "minLength": 1},
+                "error_type": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "runnerSetupFailureResponse": {
+      "allOf": [
+        {"$ref": "#/$defs/errorEnvelope"},
+        {
+          "type": "object",
+          "properties": {
+            "error": {"$ref": "#/$defs/runnerSetupError"}
+          }
+        }
+      ]
+    },
+    "runnerResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/runnerSetupFailureResponse"}
+      ]
+    },
+    "publicResponse": {
+      "anyOf": [
+        {"$ref": "#/$defs/authResponse"},
+        {"$ref": "#/$defs/searchResponse"},
+        {"$ref": "#/$defs/resolveResponse"},
+        {"$ref": "#/$defs/downloadResponse"},
+        {"$ref": "#/$defs/accountResponse"},
+        {"$ref": "#/$defs/domainsResponse"},
+        {"$ref": "#/$defs/popularResponse"},
+        {"$ref": "#/$defs/doctorResponse"},
+        {"$ref": "#/$defs/batchResponse"},
+        {"$ref": "#/$defs/runnerResponse"},
+        {"$ref": "#/$defs/errorEnvelope"}
+      ]
+    }
+  }
+}
