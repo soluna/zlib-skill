@@ -1984,8 +1984,10 @@ def check_anna(
                 trusted_proxy_hosts=trusted_hosts,
             )
             active_budget = budget or operation_budget(args)
+            # Keep the module-level requester seam used by offline callers while
+            # retaining redirect and URL validation in ``safe_get``.
             resp = safe_get(
-                requests.Session(),
+                requests,
                 base_url,
                 headers=HEADERS,
                 timeout=active_budget.timeout(15),
