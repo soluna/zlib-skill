@@ -236,7 +236,9 @@ def test_doctor_offline_success_is_a_schema_valid_public_response(monkeypatch, t
     ("available", "expected_status", "expected_usable"),
     [(2, "healthy", True), (1, "degraded", True), (0, "unavailable", False)],
 )
-def test_doctor_overall_status_is_explicit(monkeypatch, capsys, available, expected_status, expected_usable):
+def test_doctor_overall_status_is_explicit(
+    monkeypatch, capsys, available, expected_status, expected_usable
+):
     statuses = [
         engine.SourceStatus(
             source=name,
@@ -268,12 +270,17 @@ def test_batch_deadline_is_shared_and_late_items_are_cancelled(monkeypatch, tmp_
         raise engine.SkillError("SOURCE_TIMEOUT", "timed out")
 
     monkeypatch.setattr(engine, "download_anna", slow_download)
-    exit_code, payload = _run_json(["batch", str(batch_file), "--deadline-seconds", "0.001"], capsys)
+    exit_code, payload = _run_json(
+        ["batch", str(batch_file), "--deadline-seconds", "0.001"], capsys
+    )
     assert exit_code == 0
     assert payload["count"] == 2
     assert len(calls) <= 1
     assert all("error" in item for item in payload["results"])
-    assert any(item["error"]["code"] in {"SOURCE_TIMEOUT", "OPERATION_TIMED_OUT", "OPERATION_CANCELLED"} for item in payload["results"])
+    assert any(
+        item["error"]["code"] in {"SOURCE_TIMEOUT", "OPERATION_TIMED_OUT", "OPERATION_CANCELLED"}
+        for item in payload["results"]
+    )
 
 
 def test_batch_controlled_failure_is_a_schema_valid_public_response(tmp_path, capsys):
