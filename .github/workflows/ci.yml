@@ -43,7 +43,7 @@ jobs:
 
       - name: Test and coverage
         run: |
-          pytest -q --cov=scripts --cov=evals --cov-report=json:/tmp/zlib-coverage.json
+          pytest -q --cov=plugins/zlib-skill/scripts --cov=evals --cov-report=json:/tmp/zlib-coverage.json
           python scripts/check_coverage.py /tmp/zlib-coverage.json
 
   package:
