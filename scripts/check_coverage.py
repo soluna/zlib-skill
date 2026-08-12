@@ -24,6 +24,10 @@ def main(path: str) -> int:
     total = float(data.get("totals", {}).get("percent_covered", 0))
     if total < MINIMUM_PERCENT:
         print(f"coverage total {total:.2f}% is below {MINIMUM_PERCENT:.2f}%", file=sys.stderr)
+        for key, value in sorted(data.get("files", {}).items()):
+            if CANONICAL_PREFIX in key:
+                percent = value.get("summary", {}).get("percent_covered", 0)
+                print(f"  {key}: {percent:.2f}%", file=sys.stderr)
         return 1
     files = data.get("files", {})
     if not any(CANONICAL_PREFIX in key for key in files):
