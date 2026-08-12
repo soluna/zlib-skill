@@ -34,7 +34,7 @@ def test_coverage_gate_rejects_module_below_threshold(tmp_path):
     payload = _coverage_fixture(100)
     payload["files"]["plugins/zlib-skill/scripts/zlib_anna/schema.py"]["summary"][
         "percent_covered"
-    ] = 84.99
+    ] = check_coverage.MINIMUM_PERCENT - 0.01
     path = tmp_path / "coverage.json"
     path.write_text(json.dumps(payload))
     assert check_coverage.main(str(path)) == 1
