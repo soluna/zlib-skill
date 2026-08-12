@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 import run as runner
@@ -223,7 +225,55 @@ def test_doctor_offline_success_is_a_schema_valid_public_response(monkeypatch, t
     assert exit_code == 0
     assert {item["source"] for item in payload["sources"]} == {"zlib", "anna"}
     assert all(item["available"] is False for item in payload["sources"])
+    assert payload["overall_status"] == "unavailable"
+    assert payload["usable"] is False
+    assert isinstance(payload["next_actions"], list)
+    assert all(item["outcome"] == "unavailable" for item in payload["sources"])
     _assert_schema(payload, "doctorResponse")
+
+
+@pytest.mark.parametrize(
+    ("available", "expected_status", "expected_usable"),
+    [(2, "healthy", True), (1, "degraded", True), (0, "unavailable", False)],
+)
+def test_doctor_overall_status_is_explicit(monkeypatch, capsys, available, expected_status, expected_usable):
+    statuses = [
+        engine.SourceStatus(
+            source=name,
+            available=index < available,
+            can_search=index < available,
+            status="ok" if index < available else "unavailable",
+        )
+        for index, name in enumerate(("zlib", "anna"))
+    ]
+    monkeypatch.setattr(engine, "load_config", lambda **_: {})
+    monkeypatch.setattr(engine, "config_status", lambda: {})
+    monkeypatch.setattr(engine, "check_zlib", lambda _cfg: statuses[0])
+    monkeypatch.setattr(engine, "check_anna", lambda _args: statuses[1])
+    exit_code, payload = _run_json(["doctor"], capsys)
+    assert exit_code == 0
+    assert payload["overall_status"] == expected_status
+    assert payload["usable"] is expected_usable
+    assert len(payload["next_actions"]) >= (0 if expected_status == "healthy" else 1)
+    _assert_schema(payload, "doctorResponse")
+
+
+def test_batch_deadline_is_shared_and_late_items_are_cancelled(monkeypatch, tmp_path, capsys):
+    batch_file = tmp_path / "batch.txt"
+    batch_file.write_text("anna:0123456789abcdef0123456789abcdef\n" * 2, encoding="utf-8")
+    calls = []
+
+    def slow_download(_args, _item_id):
+        calls.append(True)
+        raise engine.SkillError("SOURCE_TIMEOUT", "timed out")
+
+    monkeypatch.setattr(engine, "download_anna", slow_download)
+    exit_code, payload = _run_json(["batch", str(batch_file), "--deadline-seconds", "0.001"], capsys)
+    assert exit_code == 0
+    assert payload["count"] == 2
+    assert len(calls) <= 1
+    assert all("error" in item for item in payload["results"])
+    assert any(item["error"]["code"] in {"SOURCE_TIMEOUT", "OPERATION_TIMED_OUT", "OPERATION_CANCELLED"} for item in payload["results"])
 
 
 def test_batch_controlled_failure_is_a_schema_valid_public_response(tmp_path, capsys):

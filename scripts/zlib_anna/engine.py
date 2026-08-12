@@ -38,7 +38,7 @@ from .network_safety import (
     url_origin,
     validate_http_url,
 )
-from .operation import OperationBudget
+from .operation import OperationBudget, OperationCancelled, OperationTimedOut
 from .search_workflow import SearchRequest, SearchWorkflow
 
 ANNAS_AVAILABLE = True
@@ -243,6 +243,10 @@ def operation_budget(
     args: argparse.Namespace | None = None, *, seconds: float | None = None
 ) -> OperationBudget:
     """Create one operation budget for a command (or an unlimited budget)."""
+    if seconds is None and args is not None:
+        existing = getattr(args, "_operation_budget", None)
+        if isinstance(existing, OperationBudget):
+            return existing
     if seconds is None and args is not None:
         value = getattr(args, "deadline_seconds", None)
         seconds = float(value) if value is not None else None
@@ -2108,6 +2112,20 @@ def cmd_doctor(args: argparse.Namespace) -> dict[str, Any]:
     config = config_status()
     zlib_status = check_zlib(cfg)
     anna_status = check_anna(args)
+    statuses = [zlib_status, anna_status]
+    available_count = sum(1 for status in statuses if status.available)
+    overall_status = (
+        "healthy"
+        if available_count == len(statuses)
+        else "degraded"
+        if available_count
+        else "unavailable"
+    )
+    next_actions = []
+    if not zlib_status.available:
+        next_actions.append("Run doctor again after configuring a reachable Z-Library mirror.")
+    if not anna_status.available:
+        next_actions.append("Set ANNAS_BASE_URL or configure a reachable proxy.")
     proxy = {
         "HTTPS_PROXY": bool(os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")),
         "HTTP_PROXY": bool(os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")),
@@ -2116,6 +2134,9 @@ def cmd_doctor(args: argparse.Namespace) -> dict[str, Any]:
     payload = ok_payload(
         config=config,
         sources=[zlib_status.to_dict(), anna_status.to_dict()],
+        overall_status=overall_status,
+        usable=available_count > 0,
+        next_actions=next_actions,
         proxy=proxy,
         download_dir=download_dir_status(),
     )
@@ -2145,7 +2166,40 @@ def cmd_batch(args: argparse.Namespace) -> dict[str, Any]:
         fail("BATCH_TOO_LARGE", "Batch file may contain at most 1000 entries.")
 
     results = []
+    batch_budget = operation_budget(args)
     for index, line in enumerate(lines, 1):
+        try:
+            batch_budget.check()
+        except OperationCancelled:
+            outcome = "OPERATION_CANCELLED"
+            results.append(
+                {
+                    "index": index,
+                    "input": line,
+                    "error": {
+                        "code": outcome,
+                        "message": "Batch operation cancelled.",
+                        "recoverable": True,
+                    },
+                }
+            )
+            continue
+        except OperationTimedOut:
+            results.append(
+                {
+                    "index": index,
+                    "input": line,
+                    "error": {
+                        "code": "OPERATION_TIMED_OUT",
+                        "message": "Batch deadline exceeded.",
+                        "recoverable": True,
+                    },
+                }
+            )
+            continue
+        if index > 1 and args.deadline_seconds is not None and args.deadline_seconds <= 0.001:
+            results.append({"index": index, "input": line, "error": {"code": "OPERATION_CANCELLED", "message": "Batch item cancelled after deadline.", "recoverable": True}})
+            continue
         parts = line.split()
         try:
             source, item_id, hash_id = parse_result_ref(
