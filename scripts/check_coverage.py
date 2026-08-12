@@ -21,21 +21,29 @@ CANONICAL_PREFIX = "plugins/zlib-skill/scripts/"
 
 def main(path: str) -> int:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if float(data.get("totals", {}).get("percent_covered", 0)) < MINIMUM_PERCENT:
+    total = float(data.get("totals", {}).get("percent_covered", 0))
+    if total < MINIMUM_PERCENT:
+        print(f"coverage total {total:.2f}% is below {MINIMUM_PERCENT:.2f}%", file=sys.stderr)
         return 1
     files = data.get("files", {})
     if not any(CANONICAL_PREFIX in key for key in files):
+        print("coverage report has no canonical plugin files", file=sys.stderr)
         return 1
     for name in REQUIRED:
         matches = [
             value for key, value in files.items() if key.endswith(name) and CANONICAL_PREFIX in key
         ]
         if not matches:
+            print(f"coverage report is missing canonical {name}", file=sys.stderr)
             return 1
         highest = max(
             float(value.get("summary", {}).get("percent_covered", 0)) for value in matches
         )
         if highest < MINIMUM_PERCENT:
+            print(
+                f"canonical {name} coverage {highest:.2f}% is below {MINIMUM_PERCENT:.2f}%",
+                file=sys.stderr,
+            )
             return 1
     return 0
 
