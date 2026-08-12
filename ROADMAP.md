@@ -8,7 +8,7 @@
 - 拆分当前执行引擎为命令协调、来源适配器和下载策略深模块。
 - 改进 Anna 验证码、会员页、镜像模式和失败分类。
 - 缓存 Z-Library 域名探测，提供可审计、可签名的域名注册表更新。
-- 可选系统 keychain 存储 Z-Library token。
+- 已完成可选系统 keychain 存储及双向迁移。
 - 增加 Windows 与 Linux ARM 的干净 Skill 引导验证。
 - 为旧版本化运行缓存提供明确、安全的清理命令。
 
@@ -18,7 +18,7 @@ English:
 - Split the engine into command coordination, source adapters, and download-policy modules.
 - Improve Anna captcha/member-page detection, mirror patterns, and failure categories.
 - Cache Z-Library domain probes and design an auditable, signed registry update path.
-- Add optional OS-keychain storage for the Z-Library token.
+- Optional OS-keychain storage and bidirectional migration are complete.
 - Add clean Skill-bootstrap verification on Windows and Linux ARM.
 - Provide an explicit safe cleanup command for old versioned runtime caches.
 

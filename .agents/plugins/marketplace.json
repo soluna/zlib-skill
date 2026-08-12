@@ -1,0 +1,6 @@
+{
+  "name": "zlib-skill",
+  "plugins": [
+    {"name": "zlib-skill", "source": "./plugins/zlib-skill"}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["case", "allowed", "forbidden"],
+  "properties": {
+    "case": {"type": "string"},
+    "allowed": {"type": "array", "items": {"type": "string"}},
+    "forbidden": {"type": "array", "items": {"type": "string"}}
+  }
+}

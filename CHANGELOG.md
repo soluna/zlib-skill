@@ -100,3 +100,6 @@ changes may occur during `0.x`.
   private-network, and credential boundaries.
 - Python 3.9-3.14 CI、依赖审计、Bandit 与 secret scan / Python 3.9-3.14 CI, dependency
   audit, Bandit, and secret scanning.
+- Added schema-2 doctor availability outcomes, total operation deadlines, source-local failover, deterministic cross-source search grouping, and atomic bounded download transactions.
+- Added optional file/system-keychain credential migration with fail-closed conflict handling.
+- Added installable plugin metadata, coverage gate, and deterministic Skill behavior fixtures.

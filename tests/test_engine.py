@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from zlib_anna import SCHEMA_VERSION, SKILL_VERSION, engine
+from zlib_anna.credential_store import SystemKeychainCredentialStore
 
 PDF_BODY = b"%PDF fake"
 PDF_MD5 = hashlib.md5(PDF_BODY, usedforsecurity=False).hexdigest()
@@ -59,6 +60,28 @@ class FakeResponse:
         pass
 
 
+class MemoryKeychainBackend:
+    def __init__(self):
+        self.secret = None
+
+    def capability(self):
+        return True
+
+    def read(self, _service, _account):
+        return self.secret
+
+    def write(self, _service, _account, secret):
+        self.secret = bytes(secret)
+
+    def delete(self, _service, _account):
+        self.secret = None
+
+    def delete_if_matches(self, service, account, expected):
+        if self.secret != expected:
+            raise RuntimeError("source changed")
+        self.delete(service, account)
+
+
 @pytest.fixture
 def temp_config():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -100,6 +123,18 @@ def test_default_config_dir_accepts_previous_override_aliases(monkeypatch, tmp_p
     assert engine.default_config_dir() == legacy
 
 
+def test_engine_config_store_resolves_environment_path_after_import(monkeypatch, tmp_path):
+    runtime_config = tmp_path / "runtime-config"
+    monkeypatch.setattr(engine, "CONFIG_DIR", None)
+    monkeypatch.setattr(engine, "CONFIG_FILE", None)
+    monkeypatch.setenv("ZLIB_SKILL_CONFIG_DIR", str(runtime_config))
+
+    engine.save_config({"domain": "z-library.example"})
+
+    assert engine.load_config() == {"domain": "z-library.example"}
+    assert (runtime_config / "config.json").is_file()
+
+
 def test_safe_json_response_rejects_non_object_payload():
     response = MagicMock()
     response.json.return_value = ["unexpected", "payload"]
@@ -119,6 +154,18 @@ def test_load_config_rejects_non_object_json(temp_config):
     assert engine.load_config(strict=False) == {}
 
 
+def test_cli_maps_config_io_failure_to_stable_error_envelope(temp_config, capsys):
+    _, config_file = temp_config
+    config_file.mkdir(parents=True)
+
+    exit_code = engine.main(["auth", "status", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "CONFIG_IO_ERROR"
+
+
 def test_save_config_uses_private_permissions(temp_config):
     config_dir, config_file = temp_config
     cfg = {"remix_userid": "123", "remix_userkey": "token-value", "domain": "test.example"}
@@ -128,6 +175,18 @@ def test_save_config_uses_private_permissions(temp_config):
     assert engine.load_config() == cfg
     assert stat.S_IMODE(config_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(config_file.stat().st_mode) == 0o600
+
+
+def test_save_config_rejects_partial_credentials_without_replacing_existing_state(
+    temp_config,
+):
+    engine.save_config({"domain": "z-library.example"})
+
+    with pytest.raises(engine.SkillError) as raised:
+        engine.save_config({"remix_userid": "42", "domain": "replacement.example"})
+
+    assert raised.value.code == "CREDENTIAL_INVALID"
+    assert engine.load_config() == {"domain": "z-library.example"}
 
 
 def test_load_config_repairs_legacy_permissions(temp_config):
@@ -186,6 +245,121 @@ def test_config_status_redacts_sensitive_values(temp_config):
     assert status["zlib"]["email"] == "s****t@example.com"
     assert "token-value" not in encoded
     assert str(config_file) in encoded
+
+
+def test_auth_status_reports_selected_credential_adapter_without_secrets(temp_config, capsys):
+    engine.save_config(
+        {
+            "remix_userid": "42",
+            "remix_userkey": "token-value",
+            "email": "reader@example.com",
+        }
+    )
+
+    with patch("zlib_anna.credential_store.sys.platform", "linux"):
+        exit_code = engine.main(["auth", "status", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["credential_storage"] == {
+        "selected": "file",
+        "has_credential": True,
+        "adapters": {
+            "file": {"capability": True, "has_credential": True},
+            "system-keychain": {"capability": False, "has_credential": None},
+        },
+        "migration_phase": None,
+    }
+    assert payload["zlib"]["email"] == "r****r@example.com"
+    assert "token-value" not in json.dumps(payload)
+
+
+def test_auth_storage_file_is_an_idempotent_public_cli_operation(temp_config, capsys):
+    engine.save_config(
+        {
+            "remix_userid": "42",
+            "remix_userkey": "token-value",
+            "email": "reader@example.com",
+        }
+    )
+
+    keychain = SystemKeychainCredentialStore(backend=MemoryKeychainBackend())
+    with patch(
+        "zlib_anna.credential_store.SystemKeychainCredentialStore",
+        return_value=keychain,
+    ):
+        exit_code = engine.main(["auth", "storage", "file", "--json"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["source"] == "zlib"
+    assert payload["storage"] == "file"
+    assert payload["migrated"] is False
+    assert payload["authenticated"] is True
+    assert "token-value" not in captured.out
+    assert captured.err == ""
+
+
+def test_auth_logout_clears_selected_system_keychain_without_plaintext_fallback(
+    temp_config, capsys
+):
+    backend = MemoryKeychainBackend()
+    keychain = SystemKeychainCredentialStore(backend=backend)
+
+    with patch(
+        "zlib_anna.credential_store.SystemKeychainCredentialStore",
+        return_value=keychain,
+    ):
+        engine.save_config(
+            {
+                "remix_userid": "42",
+                "remix_userkey": "token-value",
+            }
+        )
+        assert engine.main(["auth", "storage", "system-keychain", "--json"]) == 0
+        capsys.readouterr()
+        exit_code = engine.main(["auth", "logout", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["authenticated"] is False
+    assert backend.secret is None
+    assert "token-value" not in temp_config[1].read_text(encoding="utf-8")
+    assert "token-value" not in captured.out
+
+
+def test_auth_storage_cli_migrates_to_keychain_and_back_without_secret_output(temp_config, capsys):
+    backend = MemoryKeychainBackend()
+    keychain = SystemKeychainCredentialStore(backend=backend)
+
+    with patch(
+        "zlib_anna.credential_store.SystemKeychainCredentialStore",
+        return_value=keychain,
+    ):
+        engine.save_config(
+            {
+                "remix_userid": "42",
+                "remix_userkey": "token-value",
+            }
+        )
+        to_keychain = engine.main(["auth", "storage", "system-keychain", "--json"])
+        keychain_payload = json.loads(capsys.readouterr().out)
+        persisted_in_keychain_mode = temp_config[1].read_text(encoding="utf-8")
+        to_file = engine.main(["auth", "storage", "file", "--json"])
+        file_payload = json.loads(capsys.readouterr().out)
+
+    assert to_keychain == 0
+    assert keychain_payload["storage"] == "system-keychain"
+    assert "token-value" not in json.dumps(keychain_payload)
+    assert "token-value" not in persisted_in_keychain_mode
+    assert to_file == 0
+    assert file_payload["storage"] == "file"
+    assert "token-value" not in json.dumps(file_payload)
+    assert backend.secret is None
+    assert engine.load_config()["remix_userkey"] == "token-value"
 
 
 def test_config_status_reports_zlib_domain_override(temp_config):

@@ -1,0 +1,7 @@
+{
+  "cases": [
+    {"name": "anonymous-search", "command": "search", "must_not": ["auth login"], "must": ["search"]},
+    {"name": "confirm-before-download", "command": "download", "requires_confirmation": true, "must": ["download"]},
+    {"name": "doctor-recovery", "command": "doctor", "must": ["overall_status", "next_actions"]}
+  ]
+}
