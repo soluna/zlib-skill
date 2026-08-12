@@ -2009,6 +2009,32 @@ def check_anna(args: argparse.Namespace | None = None) -> SourceStatus:
             failures.append(
                 {"origin": url_origin(base_url), "error_type": f"HTTP_{resp.status_code}"}
             )
+        except OperationCancelled:
+            return SourceStatus(
+                "anna",
+                available=False,
+                authenticated=False,
+                can_search=False,
+                can_download=False,
+                can_attempt_download=False,
+                status="cancelled",
+                outcome="cancelled",
+                message="Anna's Archive health check was cancelled.",
+                details={"candidate_origins": [url_origin(item) for item in base_urls]},
+            )
+        except OperationTimedOut:
+            return SourceStatus(
+                "anna",
+                available=False,
+                authenticated=False,
+                can_search=False,
+                can_download=False,
+                can_attempt_download=False,
+                status="timed_out",
+                outcome="timed_out",
+                message="Anna's Archive health check exceeded its deadline.",
+                details={"candidate_origins": [url_origin(item) for item in base_urls]},
+            )
         except (requests.RequestException, UnsafeUrlError) as exc:
             failures.append({"origin": url_origin(base_url), "error_type": type(exc).__name__})
 
