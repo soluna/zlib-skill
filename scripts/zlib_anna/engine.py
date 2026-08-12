@@ -7,6 +7,7 @@ import argparse
 import getpass
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -37,6 +38,7 @@ from .network_safety import (
     url_origin,
     validate_http_url,
 )
+from .operation import OperationBudget
 
 ANNAS_AVAILABLE = True
 
@@ -200,6 +202,8 @@ class SourceStatus:
     can_download: bool = False
     can_attempt_download: bool = False
     status: str = "unknown"
+    # Additive schema-2 outcome.  ``status`` remains the historical value.
+    outcome: str | None = None
     message: str = ""
     details: dict[str, Any] | None = None
 
@@ -212,12 +216,58 @@ class SourceStatus:
             "can_download": self.can_download,
             "can_attempt_download": self.can_attempt_download,
             "status": self.status,
+            "outcome": self.outcome or _outcome_for_status(self.status, self.available),
         }
         if self.message:
             payload["message"] = self.message
         if self.details:
             payload["details"] = self.details
         return payload
+
+
+def _outcome_for_status(status: str, available: bool) -> str:
+    """Map legacy status values to the additive operation outcome."""
+    if status == "ok" and available:
+        return "ok"
+    if status in {"timed_out", "timeout"}:
+        return "timed_out"
+    if status in {"cancelled", "canceled"}:
+        return "cancelled"
+    if status in {"unavailable", "module_missing", "unknown"}:
+        return "unavailable"
+    return "unavailable"
+
+
+def operation_budget(
+    args: argparse.Namespace | None = None, *, seconds: float | None = None
+) -> OperationBudget:
+    """Create one operation budget for a command (or an unlimited budget)."""
+    if seconds is None and args is not None:
+        value = getattr(args, "deadline_seconds", None)
+        seconds = float(value) if value is not None else None
+    return OperationBudget.from_seconds(seconds)
+
+
+def zlib_source_pool(client: Any, budget: OperationBudget):
+    """Wrap an initialized Z-Library client in the source-local pool seam."""
+    from .zlib_source import ZlibSourcePool
+
+    origin = str(client.getDomain()).rstrip("/")
+    if not origin.startswith(("http://", "https://")):
+        origin = f"https://{origin}"
+    return ZlibSourcePool(
+        [origin],
+        client_factory=lambda _origin: client,
+        budget=budget,
+    )
+
+
+def pooled_zlib_value(pool: Any, operation: str, method: str, *args: Any, **kwargs: Any) -> Any:
+    result = pool.call_client(operation, method, *args, **kwargs)
+    if result.outcome == "ok":
+        return result.value
+    code = "SOURCE_TIMEOUT" if result.outcome == "timed_out" else "SOURCE_UNAVAILABLE"
+    fail(code, "Z-Library operation did not complete.", details={"operation": operation})
 
 
 def print_human(args: argparse.Namespace, message: str = "") -> None:
@@ -767,9 +817,11 @@ def search_zlib(
                 update_config=False,
                 resolved_domain=working,
             )
-            result = z.search(**build_search_kwargs(args))
+            budget = operation_budget(args)
+            pooled = zlib_source_pool(z, budget)
+            result = pooled_zlib_value(pooled, "search", "search", **build_search_kwargs(args))
             break
-        except (requests.RequestException, ValueError):
+        except (requests.RequestException, ValueError, SkillError):
             excluded.add(working)
             failed_domains.append(working)
 
@@ -826,24 +878,36 @@ def search_anna(args: argparse.Namespace) -> tuple[list[dict[str, Any]], SourceS
             fail("MODULE_MISSING", "Anna's Archive module is unavailable.")
         return [], status
 
-    results = None
-    selected_base_url = None
-    failures: list[dict[str, str]] = []
+    from .annas_archive import AnnasArchivePool
+
+    budget = operation_budget(args)
+    pool = AnnasArchivePool(anna_base_urls(), budget=budget)
+    search_kwargs: dict[str, Any] = {
+        "limit": args.limit,
+        "page": args.page,
+        "ext_filter": parse_csv(args.ext),
+    }
+    # Passing only active filters keeps the historical client seam usable for
+    # callers that provide a tiny stand-in with the old signature.
+    if getattr(args, "lang", None):
+        search_kwargs["lang"] = args.lang
+    if getattr(args, "year_from", None) is not None:
+        search_kwargs["year_from"] = args.year_from
+    if getattr(args, "year_to", None) is not None:
+        search_kwargs["year_to"] = args.year_to
+    pooled = pool.search(args.query, **search_kwargs)
+    results = pooled.value if pooled.outcome == "ok" else None
+    selected_base_url = pooled.origin
+    attempts = pooled.attempts
+    failures: list[dict[str, str]] = [
+        {
+            "origin": url_origin(str(item.get("origin", ""))) or "",
+            "error_type": str(item.get("error_type") or "RequestError"),
+        }
+        for item in attempts
+        if item.get("outcome") != "ok"
+    ]
     last_exc: Exception | None = None
-    for base_url in anna_base_urls():
-        try:
-            client = annas_archive.AnnasArchiveClient(base_url=base_url)
-            results = client.search(
-                args.query,
-                limit=args.limit,
-                page=args.page,
-                ext_filter=parse_csv(args.ext),
-            )
-            selected_base_url = base_url
-            break
-        except Exception as exc:
-            last_exc = exc
-            failures.append({"origin": url_origin(base_url), "error_type": type(exc).__name__})
 
     if results is None:
         exc = last_exc or RuntimeError("No Anna's Archive base URL is configured")
@@ -854,11 +918,12 @@ def search_anna(args: argparse.Namespace) -> tuple[list[dict[str, Any]], SourceS
             can_search=False,
             can_download=False,
             can_attempt_download=False,
-            status="unavailable",
+            status=("timed_out" if pooled.outcome == "timed_out" else "unavailable"),
+            outcome=pooled.outcome,
             message="Anna's Archive request failed.",
             details={
                 "base_origin": anna_base_origin(),
-                "error_type": type(exc).__name__,
+                "error_type": pooled.error_type or type(exc).__name__,
                 "failed_origins": [item["origin"] for item in failures],
             },
         )
@@ -916,6 +981,7 @@ def search_anna(args: argparse.Namespace) -> tuple[list[dict[str, Any]], SourceS
         can_download=False,
         can_attempt_download=True,
         status="ok",
+        outcome="ok",
         details=details,
     )
 
@@ -1131,13 +1197,16 @@ def download_zlib(args: argparse.Namespace, book_id: str, hash_id: str | None) -
 
     cfg = load_config()
     z = init_zlibrary(cfg, require_auth=True)
+    pool = zlib_source_pool(z, operation_budget(args))
 
-    info = z.getBookInfo(book_id, hash_id)
+    info = pooled_zlib_value(pool, "download_info", "getBookInfo", book_id, hash_id)
     if not info or not info.get("success"):
         fail("BOOK_INFO_FAILED", "Could not fetch Z-Library book metadata.")
 
     book = info.get("book", {})
-    filename, download_url = z.getBookDownload(book_id, hash_id)
+    filename, download_url = pooled_zlib_value(
+        pool, "download_resolve", "getBookDownload", book_id, hash_id
+    )
     filename = sanitize_filename(filename, fallback=f"{book_id}.{book.get('extension') or 'book'}")
     output_dir = ensure_output_dir(args.output)
     final_path = unique_path(output_dir / filename)
@@ -1151,8 +1220,13 @@ def download_zlib(args: argparse.Namespace, book_id: str, hash_id: str | None) -
             part_path.unlink()
         try:
             if attempt > 1:
-                _, download_url = z.getBookDownload(book_id, hash_id)
-            bytes_written = z.downloadUrlToPath(
+                _, download_url = pooled_zlib_value(
+                    pool, "download_resolve", "getBookDownload", book_id, hash_id
+                )
+            bytes_written = pooled_zlib_value(
+                pool,
+                "download",
+                "downloadUrlToPath",
                 download_url,
                 part_path,
                 max_bytes=size_limit,
@@ -1200,19 +1274,18 @@ def download_zlib(args: argparse.Namespace, book_id: str, hash_id: str | None) -
     return payload
 
 
-def anna_links(md5: str) -> dict[str, Any]:
+def anna_links(md5: str, *, budget: OperationBudget | None = None) -> dict[str, Any]:
     if not ANNAS_AVAILABLE:
         fail("MODULE_MISSING", "Anna's Archive module is unavailable.")
-    last_exc: Exception | None = None
-    for base_url in anna_base_urls():
-        try:
-            client = annas_archive.AnnasArchiveClient(base_url=base_url)
-            return client.get_download_links(md5)
-        except Exception as exc:
-            last_exc = exc
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("No Anna's Archive base URL is configured")
+    from .annas_archive import AnnasArchivePool
+
+    pool = AnnasArchivePool(anna_base_urls(), budget=budget)
+    return_value = pool.resolve(md5)
+    if return_value.outcome == "ok":
+        return return_value.value
+    if return_value.outcome == "timed_out":
+        raise TimeoutError("Anna's Archive operation timed out")
+    raise RuntimeError("Anna's Archive operation unavailable")
 
 
 def content_type(response: requests.Response) -> str:
@@ -1431,7 +1504,7 @@ def download_anna(args: argparse.Namespace, md5: str) -> dict[str, Any]:
         fail("INVALID_RESULT_ID", "Anna id must be a 32-character hexadecimal MD5.")
 
     try:
-        links = anna_links(md5)
+        links = anna_links(md5, budget=operation_budget(args))
     except Exception as exc:
         fail(
             "LINK_RESOLUTION_FAILED",
@@ -1566,7 +1639,13 @@ def cmd_resolve(args: argparse.Namespace) -> dict[str, Any]:
             fail("HASH_REQUIRED", "Z-Library resolve requires zlib:<book_id>:<hash>.")
         cfg = load_config()
         z = init_zlibrary(cfg, require_auth=True)
-        info = z.getBookInfo(item_id, hash_id)
+        info = pooled_zlib_value(
+            zlib_source_pool(z, operation_budget(args)),
+            "resolve",
+            "getBookInfo",
+            item_id,
+            hash_id,
+        )
         if not info or not info.get("success"):
             fail("BOOK_INFO_FAILED", "Could not fetch Z-Library book metadata.")
         payload = ok_payload(
@@ -1576,7 +1655,7 @@ def cmd_resolve(args: argparse.Namespace) -> dict[str, Any]:
         )
     else:
         try:
-            links = anna_links(item_id)
+            links = anna_links(item_id, budget=operation_budget(args))
         except Exception as exc:
             fail(
                 "LINK_RESOLUTION_FAILED",
@@ -1604,7 +1683,8 @@ def cmd_resolve(args: argparse.Namespace) -> dict[str, Any]:
 def cmd_info(args: argparse.Namespace) -> dict[str, Any]:
     cfg = load_config()
     z = init_zlibrary(cfg, require_auth=True)
-    profile = z.getProfile()
+    pool = zlib_source_pool(z, operation_budget(args))
+    profile = pooled_zlib_value(pool, "info", "getProfile")
     if not profile or not profile.get("success"):
         fail("PROFILE_FAILED", "Could not fetch Z-Library profile.")
 
@@ -1616,7 +1696,7 @@ def cmd_info(args: argparse.Namespace) -> dict[str, Any]:
             "kindle_email": mask_email(user.get("kindle_email")),
             "downloads_today": user.get("downloads_today", 0),
             "downloads_limit": user.get("downloads_limit", 10),
-            "downloads_left": z.getDownloadsLeft(),
+            "downloads_left": pooled_zlib_value(pool, "info_quota", "getDownloadsLeft"),
         },
         domain=z.getDomain(),
     )
@@ -1657,7 +1737,9 @@ def cmd_domains(args: argparse.Namespace) -> dict[str, Any]:
 def cmd_popular(args: argparse.Namespace) -> dict[str, Any]:
     cfg = load_config()
     z = init_zlibrary(cfg, require_auth=True)
-    result = z.getMostPopular()
+    result = pooled_zlib_value(
+        zlib_source_pool(z, operation_budget(args)), "popular", "getMostPopular"
+    )
     if not result or not result.get("success"):
         fail("POPULAR_FAILED", "Could not fetch popular books.")
     books = [normalize_zlib_book(book) for book in result.get("books", [])[: args.limit]]
@@ -1698,7 +1780,9 @@ def login_zlib(args: argparse.Namespace) -> dict[str, Any]:
 
     z = Zlibrary()
     z.setDomain(working)
-    result = z.login(args.email, password)
+    result = pooled_zlib_value(
+        zlib_source_pool(z, operation_budget(args)), "login", "login", args.email, password
+    )
     if not result or not result.get("success"):
         fail(
             "LOGIN_FAILED",
@@ -1800,7 +1884,7 @@ def cmd_auth(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
-def check_anna() -> SourceStatus:
+def check_anna(args: argparse.Namespace | None = None) -> SourceStatus:
     if not ANNAS_AVAILABLE:
         return SourceStatus(
             "anna",
@@ -1837,10 +1921,11 @@ def check_anna() -> SourceStatus:
                 ),
                 trusted_proxy_hosts=trusted_hosts,
             )
+            budget = operation_budget(args)
             resp = requests.get(
                 base_url,
                 headers=HEADERS,
-                timeout=15,
+                timeout=budget.timeout(15),
                 allow_redirects=False,
             )
             available = 200 <= resp.status_code < 300
@@ -1910,7 +1995,13 @@ def check_zlib(cfg: dict[str, Any]) -> SourceStatus:
                 update_config=False,
                 resolved_domain=working,
             )
-            authenticated = z.isLoggedIn()
+            authenticated = bool(
+                pooled_zlib_value(
+                    zlib_source_pool(z, operation_budget(seconds=15)),
+                    "doctor_auth",
+                    "isLoggedIn",
+                )
+            )
         except Exception:
             authenticated = False
     return SourceStatus(
@@ -1960,7 +2051,7 @@ def cmd_doctor(args: argparse.Namespace) -> dict[str, Any]:
     cfg = load_config(strict=False)
     config = config_status()
     zlib_status = check_zlib(cfg)
-    anna_status = check_anna()
+    anna_status = check_anna(args)
     proxy = {
         "HTTPS_PROXY": bool(os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")),
         "HTTP_PROXY": bool(os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")),
@@ -2043,12 +2134,28 @@ def cmd_batch(args: argparse.Namespace) -> dict[str, Any]:
 
 def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON on stdout")
+    parser.add_argument(
+        "--deadline-seconds",
+        type=deadline_seconds,
+        default=None,
+        help="Total operation budget in seconds (at most one hour)",
+    )
 
 
 def positive_int(value: str) -> int:
     number = int(value)
     if number <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
+    return number
+
+
+def deadline_seconds(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if not math.isfinite(number) or number < 0.001 or number > 3600:
+        raise argparse.ArgumentTypeError("must be between 0.001 and 3600 seconds")
     return number
 
 

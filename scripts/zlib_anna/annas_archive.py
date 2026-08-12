@@ -10,6 +10,7 @@ Copyright (c) 2026 zlib-skill contributors
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import re
@@ -26,6 +27,13 @@ from .network_safety import (
     env_flag,
     safe_get,
     validate_http_url,
+)
+from .operation import (
+    AttemptLog,
+    CancellationToken,
+    OperationBudget,
+    OriginPool,
+    PoolResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,12 +67,107 @@ SELECTOR_CHAIN = [
 
 RETRY_MAX = 3
 RETRY_BACKOFF = 2  # seconds, exponential
+DEFAULT_MAX_HTML_BYTES = 4 * 1024 * 1024
+MAX_ANNA_HTML_BYTES = DEFAULT_MAX_HTML_BYTES
 MD5_PATTERN = re.compile(r"^[0-9a-f]{32}$", re.I)
 LIBGEN_HOSTS = {"libgen.li", "libgen.is", "libgen.rs"}
 TRUSTED_PROXY_HOSTS = {
     *(urlparse(base_url).hostname for base_url in OFFICIAL_BASE_URLS),
     *LIBGEN_HOSTS,
 }
+
+
+class AnnaResponseError(ValueError):
+    """An untrusted Anna response failed bounded validation."""
+
+    code = "ANNA_RESPONSE_REJECTED"
+
+
+class AnnaResponseTooLarge(AnnaResponseError):
+    code = "ANNA_RESPONSE_TOO_LARGE"
+
+
+def _response_header(response, name: str) -> str | None:
+    headers = getattr(response, "headers", {}) or {}
+    try:
+        value = headers.get(name)
+        if value is None:
+            value = headers.get(name.lower())
+        if value is None:
+            value = headers.get(name.title())
+    except AttributeError:
+        return None
+    # ``requests`` headers are strings.  Treat permissive test doubles (for
+    # example an unconfigured MagicMock) as an absent header rather than as a
+    # malformed remote value.
+    if isinstance(value, (str, bytes)):
+        return value.decode() if isinstance(value, bytes) else value
+    return None
+
+
+def _bounded_response_bytes(response, *, max_bytes: int = DEFAULT_MAX_HTML_BYTES) -> bytes:
+    """Read HTML with both declared and actual byte caps."""
+    declared_value = _response_header(response, "content-length")
+    if declared_value:
+        try:
+            declared = int(declared_value)
+        except (TypeError, ValueError) as exc:
+            raise AnnaResponseError("Anna response has invalid Content-Length") from exc
+        if declared < 0:
+            raise AnnaResponseError("Anna response has invalid Content-Length")
+        if declared > max_bytes:
+            raise AnnaResponseTooLarge("Anna response exceeds the size limit")
+
+    media_type = (_response_header(response, "content-type") or "").split(";", 1)[0].strip().lower()
+    if media_type and media_type not in {"text/html", "application/xhtml+xml"}:
+        raise AnnaResponseError("Anna response has an unexpected content type")
+
+    iterator = getattr(response, "iter_content", None)
+    if callable(iterator):
+        chunks: list[bytes] = []
+        total = 0
+        yielded = False
+        try:
+            for chunk in iterator(chunk_size=256 * 1024):
+                if not chunk:
+                    continue
+                yielded = True
+                item = bytes(chunk)
+                total += len(item)
+                if total > max_bytes:
+                    raise AnnaResponseTooLarge("Anna response exceeds the size limit")
+                chunks.append(item)
+        except AnnaResponseError:
+            raise
+        except Exception as exc:
+            raise AnnaResponseError("Anna response body is invalid") from exc
+        if yielded:
+            return b"".join(chunks)
+
+    content = getattr(response, "content", None)
+    if isinstance(content, (bytes, bytearray, memoryview)):
+        body = bytes(content)
+        if len(body) > max_bytes:
+            raise AnnaResponseTooLarge("Anna response exceeds the size limit")
+        return body
+
+    text = getattr(response, "text", None)
+    if isinstance(text, str):
+        body = text.encode("utf-8")
+        if len(body) > max_bytes:
+            raise AnnaResponseTooLarge("Anna response exceeds the size limit")
+        return body
+    raise AnnaResponseError("Anna response body is unavailable")
+
+
+def bounded_html_text(response, *, max_bytes: int = DEFAULT_MAX_HTML_BYTES) -> str:
+    """Validate and decode one HTML response before parsing."""
+    try:
+        return _bounded_response_bytes(response, max_bytes=max_bytes).decode(
+            "utf-8", errors="replace"
+        )
+    except UnicodeError as exc:
+        raise AnnaResponseError("Anna response is not valid text") from exc
 
 
 def _normalize_ext_filter(ext_filter) -> set[str]:
@@ -82,6 +185,9 @@ def _http_get_with_retry(
     url: str,
     timeout: int = 30,
     label: str = "request",
+    *,
+    budget: OperationBudget | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> requests.Response:
     """
     HTTP GET with retry and exponential backoff.
@@ -104,10 +210,13 @@ def _http_get_with_retry(
     last_exc = None
     for attempt in range(1, RETRY_MAX + 1):
         try:
+            if cancellation is not None:
+                cancellation.raise_if_cancelled()
+            request_timeout = budget.timeout(timeout) if budget is not None else timeout
             resp = safe_get(
                 session,
                 url,
-                timeout=timeout,
+                timeout=request_timeout,
                 trusted_proxy_hosts=TRUSTED_PROXY_HOSTS,
             )
             # 4xx: client error, don't retry
@@ -142,7 +251,13 @@ def _http_get_with_retry(
         if attempt < RETRY_MAX:
             delay = RETRY_BACKOFF**attempt
             logger.info(f"[{label}] Retrying in {delay}s...")
-            time.sleep(delay)
+            if budget is not None:
+                budget.sleep(delay)
+            elif cancellation is not None:
+                if cancellation.wait(delay):
+                    cancellation.raise_if_cancelled()
+            else:
+                time.sleep(delay)
 
     raise last_exc  # type: ignore
 
@@ -168,7 +283,15 @@ def _find_book_links(soup: BeautifulSoup) -> tuple[list, str]:
 class AnnasArchiveClient:
     """Anna's Archive 客户端（含错误处理、重试、CSS 降级）"""
 
-    def __init__(self, base_url: str | None = None):
+    def __init__(
+        self,
+        base_url: str | None = None,
+        *,
+        requester: requests.Session | None = None,
+        budget: OperationBudget | None = None,
+        cancellation: CancellationToken | None = None,
+        max_html_bytes: int = DEFAULT_MAX_HTML_BYTES,
+    ):
         self.base_url = (base_url or os.environ.get("ANNAS_BASE_URL") or BASE_URL).rstrip("/")
         validate_http_url(
             self.base_url,
@@ -179,8 +302,11 @@ class AnnasArchiveClient:
             ),
             resolve_dns=False,
         )
-        self.session = requests.Session()
+        self.session = requester or requests.Session()
         self.session.headers.update(HEADERS)
+        self.budget = budget
+        self.cancellation = cancellation or (budget.token if budget is not None else None)
+        self.max_html_bytes = max(1, int(max_html_bytes))
 
     def search(
         self,
@@ -188,6 +314,13 @@ class AnnasArchiveClient:
         limit: int = 10,
         page: int = 1,
         ext_filter: str | list[str] | None = None,
+        language: str | None = None,
+        year_from: int | None = None,
+        year_to: int | None = None,
+        *,
+        lang: str | None = None,
+        budget: OperationBudget | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> list[dict]:
         """
         搜索书籍（含 HTTP 重试 + CSS 选择器降级 + 分页）
@@ -211,10 +344,25 @@ class AnnasArchiveClient:
         ext_filters = _normalize_ext_filter(ext_filter)
 
         # HTTP 请求（含重试）
-        resp = _http_get_with_retry(self.session, url, timeout=30, label="search")
+        active_budget = budget or self.budget
+        active_cancellation = cancellation or self.cancellation
+        if active_budget is None and active_cancellation is None:
+            # Keep the historical call shape for simple integrations and
+            # existing deterministic tests that replace this helper.
+            resp = _http_get_with_retry(self.session, url, timeout=30, label="search")
+        else:
+            resp = _http_get_with_retry(
+                self.session,
+                url,
+                timeout=30,
+                label="search",
+                budget=active_budget,
+                cancellation=active_cancellation,
+            )
         resp.raise_for_status()
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        html = bounded_html_text(resp, max_bytes=self.max_html_bytes)
+        soup = BeautifulSoup(html, "html.parser")
 
         # CSS 选择器降级
         book_links, selector_used = _find_book_links(soup)
@@ -229,6 +377,7 @@ class AnnasArchiveClient:
             return []
 
         results = []
+        language_filter = (lang or language or "").strip().lower()
         for link in book_links:
             href = link.get("href", "")
             if not href.startswith("/md5/"):
@@ -293,6 +442,25 @@ class AnnasArchiveClient:
                 ):
                     author = line
 
+            # Apply every local filter before the result limit.  Anna's
+            # server does not consistently honor these fields, so stopping
+            # after the first N links would silently discard later matches.
+            if ext_filters and ext.lower().lstrip(".") not in ext_filters:
+                continue
+            if language_filter:
+                language_match = re.search(r"\[([a-z]{2,3})\]", language.lower())
+                language_code = language_match.group(1) if language_match else language.lower()
+                if language_filter not in {language_code, language.lower()}:
+                    continue
+            try:
+                parsed_year = int(str(year))
+            except (TypeError, ValueError):
+                parsed_year = None
+            if year_from is not None and (parsed_year is None or parsed_year < int(year_from)):
+                continue
+            if year_to is not None and (parsed_year is None or parsed_year > int(year_to)):
+                continue
+
             results.append(
                 {
                     "md5": md5,
@@ -306,11 +474,6 @@ class AnnasArchiveClient:
                     "detail_url": f"{self.base_url}{href}",
                 }
             )
-
-            # 格式过滤
-            if ext_filters and ext.lower() not in ext_filters:
-                results.pop()
-                continue
 
             if len(results) >= limit:
                 break
@@ -332,10 +495,20 @@ class AnnasArchiveClient:
 
         url = f"{self.base_url}/md5/{md5.lower()}"
 
-        resp = _http_get_with_retry(self.session, url, timeout=30, label="download_links")
+        if self.budget is None and self.cancellation is None:
+            resp = _http_get_with_retry(self.session, url, timeout=30, label="download_links")
+        else:
+            resp = _http_get_with_retry(
+                self.session,
+                url,
+                timeout=30,
+                label="download_links",
+                budget=self.budget,
+                cancellation=self.cancellation,
+            )
         resp.raise_for_status()
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(bounded_html_text(resp, max_bytes=self.max_html_bytes), "html.parser")
 
         links = {
             "libgen_li": None,
@@ -368,6 +541,113 @@ class AnnasArchiveClient:
         return links
 
 
+class AnnasArchivePool:
+    """Anna-specific origin pool with stable official fallback order."""
+
+    def __init__(
+        self,
+        origins: tuple[str, ...] | list[str] | None = None,
+        *,
+        client_factory=None,
+        budget: OperationBudget | None = None,
+        cancellation: CancellationToken | None = None,
+        attempt_log: AttemptLog | None = None,
+        cooldown_seconds: float = 0.0,
+        max_html_bytes: int = DEFAULT_MAX_HTML_BYTES,
+    ) -> None:
+        origin_values = tuple(origins or OFFICIAL_BASE_URLS)
+        require_https = not env_flag(
+            ALLOW_INSECURE_HTTP_ENV,
+            PREVIOUS_ALLOW_INSECURE_HTTP_ENV,
+            LEGACY_ALLOW_INSECURE_HTTP_ENV,
+        )
+        for origin in origin_values:
+            validate_http_url(origin, require_https=require_https, resolve_dns=False)
+        self.pool = OriginPool(
+            origin_values,
+            source="anna",
+            budget=budget,
+            cancellation=cancellation,
+            attempt_log=attempt_log,
+            cooldown_seconds=cooldown_seconds,
+        )
+        self.client_factory = client_factory or (
+            lambda origin, **kwargs: AnnasArchiveClient(
+                base_url=origin,
+                budget=kwargs.get("budget"),
+                cancellation=kwargs.get("cancellation"),
+                max_html_bytes=max_html_bytes,
+            )
+        )
+
+    @property
+    def origins(self) -> tuple[str, ...]:
+        return self.pool.origins
+
+    @property
+    def budget(self) -> OperationBudget:
+        return self.pool.budget
+
+    @property
+    def cancellation(self) -> CancellationToken:
+        return self.pool.cancellation
+
+    @property
+    def attempt_log(self) -> AttemptLog:
+        return self.pool.attempt_log
+
+    def call(
+        self, operation: str, method: str, *args, timeout: float | None = None, **kwargs
+    ) -> PoolResult:
+        def invoke(origin: str, request_timeout: float | None, token: CancellationToken):
+            token.raise_if_cancelled()
+            try:
+                client = self.client_factory(
+                    origin,
+                    budget=self.budget,
+                    cancellation=token,
+                    timeout=request_timeout,
+                )
+            except TypeError:
+                client = self.client_factory(origin)
+            fn = getattr(client, method)
+            try:
+                parameters = inspect.signature(fn).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            call_kwargs = dict(kwargs)
+            if "timeout" in parameters or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+            ):
+                call_kwargs["timeout"] = request_timeout
+            if "cancellation" in parameters or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+            ):
+                call_kwargs["cancellation"] = token
+            return fn(*args, **call_kwargs)
+
+        return self.pool.execute(operation, invoke, timeout=timeout)
+
+    def search(self, query: str, **kwargs) -> PoolResult:
+        return self.call("search", "search", query, **kwargs)
+
+    def resolve(self, md5: str, **kwargs) -> PoolResult:
+        return self.call("resolve", "get_download_links", md5, **kwargs)
+
+    def download(self, md5: str, **kwargs) -> PoolResult:
+        return self.resolve(md5, **kwargs)
+
+    def doctor(self, **kwargs) -> PoolResult:
+        return self.call("doctor", "search", "", limit=0, **kwargs)
+
+    def info(self, md5: str, **kwargs) -> PoolResult:
+        return self.resolve(md5, **kwargs)
+
+
+AnnaOriginPool = AnnasArchivePool
+AnnasOriginPool = AnnasArchivePool
+
+
 def search_books(
     query: str,
     limit: int = 10,
@@ -388,3 +668,21 @@ def search_books(
     """
     client = AnnasArchiveClient()
     return client.search(query, limit=limit, page=page, ext_filter=ext_filter)
+
+
+__all__ = [
+    "ALLOW_INSECURE_HTTP_ENV",
+    "AnnaOriginPool",
+    "AnnasArchiveClient",
+    "AnnasArchivePool",
+    "AnnasOriginPool",
+    "BASE_URL",
+    "DEFAULT_MAX_HTML_BYTES",
+    "MAX_ANNA_HTML_BYTES",
+    "OFFICIAL_BASE_URLS",
+    "SELECTOR_CHAIN",
+    "AnnaResponseError",
+    "AnnaResponseTooLarge",
+    "bounded_html_text",
+    "search_books",
+]
