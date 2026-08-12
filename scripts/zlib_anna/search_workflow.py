@@ -125,7 +125,9 @@ def _year(value: Any) -> int | str | None:
         number = int(value)
     except (TypeError, ValueError):
         return _text(value, limit=16)
-    return number if 0 <= number <= 3000 else None
+    if not 0 <= number <= 3000:
+        return None
+    return value if isinstance(value, str) else number
 
 
 def _result_id(item: Mapping[str, Any], source: str) -> str | None:
@@ -162,10 +164,13 @@ def normalize_result(item: Any, source: str) -> dict[str, Any] | None:
         if value is not None:
             result[field_name] = value
     if source == "zlib":
-        result["id"] = result_id.split(":", 2)[1]
-        result["hash"] = result_id.rsplit(":", 1)[1]
+        if "id" in item:
+            result["id"] = result_id.split(":", 2)[1]
+        if "hash" in item:
+            result["hash"] = result_id.rsplit(":", 1)[1]
     else:
-        result["md5"] = result_id.split(":", 1)[1]
+        if "md5" in item:
+            result["md5"] = result_id.split(":", 1)[1]
     year = _year(item.get("year"))
     if year is not None:
         result["year"] = year
@@ -249,8 +254,8 @@ def merge_results(items: Sequence[dict[str, Any]], query: str, limit: int) -> li
     ordered = sorted(
         groups.items(),
         key=lambda pair: (
-            -scores[pair[0]],
             _SOURCE_ORDER.get(str(pair[1].get("source")), 99),
+            -scores[pair[0]],
             str(pair[1].get("title") or "").casefold(),
             str(pair[1].get("author") or "").casefold(),
             str(pair[1].get("result_id") or ""),

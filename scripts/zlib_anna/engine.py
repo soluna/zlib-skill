@@ -39,6 +39,7 @@ from .network_safety import (
     validate_http_url,
 )
 from .operation import OperationBudget
+from .search_workflow import SearchRequest, SearchWorkflow
 
 ANNAS_AVAILABLE = True
 
@@ -248,7 +249,7 @@ def operation_budget(
     return OperationBudget.from_seconds(seconds)
 
 
-def zlib_source_pool(client: Any, budget: OperationBudget):
+def zlib_source_pool(client: Any, budget: OperationBudget, cancellation: Any = None):
     """Wrap an initialized Z-Library client in the source-local pool seam."""
     from .zlib_source import ZlibSourcePool
 
@@ -259,6 +260,7 @@ def zlib_source_pool(client: Any, budget: OperationBudget):
         [origin],
         client_factory=lambda _origin: client,
         budget=budget,
+        cancellation=cancellation,
     )
 
 
@@ -785,6 +787,9 @@ def normalize_anna_book(book: dict[str, Any]) -> dict[str, Any]:
 def search_zlib(
     args: argparse.Namespace,
     cfg: dict[str, Any],
+    *,
+    budget: OperationBudget | None = None,
+    cancellation: Any = None,
 ) -> tuple[list[dict[str, Any]], SourceStatus]:
     excluded: set[str] = set()
     failed_domains: list[str] = []
@@ -817,8 +822,8 @@ def search_zlib(
                 update_config=False,
                 resolved_domain=working,
             )
-            budget = operation_budget(args)
-            pooled = zlib_source_pool(z, budget)
+            active_budget = budget or operation_budget(args)
+            pooled = zlib_source_pool(z, active_budget, cancellation)
             result = pooled_zlib_value(pooled, "search", "search", **build_search_kwargs(args))
             break
         except (requests.RequestException, ValueError, SkillError):
@@ -862,7 +867,12 @@ def search_zlib(
     )
 
 
-def search_anna(args: argparse.Namespace) -> tuple[list[dict[str, Any]], SourceStatus]:
+def search_anna(
+    args: argparse.Namespace,
+    *,
+    budget: OperationBudget | None = None,
+    cancellation: Any = None,
+) -> tuple[list[dict[str, Any]], SourceStatus]:
     if not ANNAS_AVAILABLE:
         status = SourceStatus(
             source="anna",
@@ -880,8 +890,8 @@ def search_anna(args: argparse.Namespace) -> tuple[list[dict[str, Any]], SourceS
 
     from .annas_archive import AnnasArchivePool
 
-    budget = operation_budget(args)
-    pool = AnnasArchivePool(anna_base_urls(), budget=budget)
+    active_budget = budget or operation_budget(args)
+    pool = AnnasArchivePool(anna_base_urls(), budget=active_budget, cancellation=cancellation)
     search_kwargs: dict[str, Any] = {
         "limit": args.limit,
         "page": args.page,
@@ -1004,6 +1014,34 @@ def print_search_table(args: argparse.Namespace, results: list[dict[str, Any]]) 
         print_human(args, f"{result_id:<44} {ext:<6} {year:<6} {size:<10} {title} / {author}")
 
 
+def search_all_workflow(
+    args: argparse.Namespace, cfg: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    request = SearchRequest(
+        query=args.query,
+        source="all",
+        limit=args.limit,
+        page=args.page,
+        year_from=args.year_from,
+        year_to=args.year_to,
+        lang=args.lang,
+        ext=tuple(parse_csv(args.ext)),
+        order=args.order,
+    )
+    budget = operation_budget(args)
+
+    def zlib_adapter(req, *, budget, cancellation):
+        return search_zlib(args, cfg, budget=budget, cancellation=cancellation)
+
+    def anna_adapter(req, *, budget, cancellation):
+        return search_anna(args, budget=budget, cancellation=cancellation)
+
+    result = SearchWorkflow({"zlib": zlib_adapter, "anna": anna_adapter}).find(
+        request, budget=budget
+    )
+    return result.results, result.sources, result.outcome
+
+
 def cmd_search(args: argparse.Namespace) -> dict[str, Any]:
     if not args.query.strip():
         fail("QUERY_REQUIRED", "Search query must not be empty.")
@@ -1016,6 +1054,27 @@ def cmd_search(args: argparse.Namespace) -> dict[str, Any]:
     source = args.source.lower()
     results: list[dict[str, Any]] = []
     statuses: list[SourceStatus] = []
+
+    if source == "all":
+        results, source_dicts, workflow_outcome = search_all_workflow(args, cfg)
+        payload = ok_payload(
+            query=args.query,
+            count=len(results),
+            results=results,
+            sources=source_dicts,
+            outcome=workflow_outcome,
+        )
+        if not results and workflow_outcome == "unavailable":
+            fail(
+                "NO_SOURCES_AVAILABLE",
+                "No requested source is available.",
+                details={"sources": source_dicts},
+            )
+        if args.json:
+            emit_json(payload)
+        else:
+            print_search_table(args, results)
+        return payload
 
     if source in ("zlib", "all"):
         try:
