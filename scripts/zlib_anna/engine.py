@@ -21,6 +21,12 @@ import requests
 from bs4 import BeautifulSoup
 
 from . import SKILL_VERSION, annas_archive, schema
+from .config_store import ConfigStore, ConfigStoreError
+from .credential_store import (
+    Credential,
+    CredentialManager,
+    CredentialStoreError,
+)
 from .network_safety import (
     ALLOW_INSECURE_HTTP_ENV,
     LEGACY_ALLOW_INSECURE_HTTP_ENV,
@@ -52,8 +58,8 @@ def default_config_dir() -> Path:
     return Path.home() / ".config" / "zlib_cli"
 
 
-CONFIG_DIR = default_config_dir()
-CONFIG_FILE = CONFIG_DIR / "config.json"
+CONFIG_DIR: Path | None = None
+CONFIG_FILE: Path | None = None
 DEFAULT_DOWNLOAD_DIR = Path.home() / "Books"
 ENTRY_POINTS = [
     "https://1lib.sk/eapi/info/domains",
@@ -274,71 +280,54 @@ def _mode(path: Path) -> str | None:
     return oct(stat.S_IMODE(path.stat().st_mode))
 
 
-def ensure_config_dir() -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(CONFIG_DIR, 0o700)
+def current_config_file() -> Path:
+    if CONFIG_FILE is not None:
+        return Path(CONFIG_FILE)
+    if CONFIG_DIR is not None:
+        return Path(CONFIG_DIR) / "config.json"
+    return default_config_dir() / "config.json"
 
 
-def repair_config_permissions() -> list[dict[str, str]]:
-    repairs: list[dict[str, str]] = []
-    targets = [
-        (CONFIG_DIR, 0o700, "config_dir"),
-        (CONFIG_FILE, 0o600, "config_file"),
-    ]
-    for path, desired_mode, kind in targets:
-        if not path.exists():
-            continue
-        try:
-            current_mode = stat.S_IMODE(path.stat().st_mode)
-            if current_mode == desired_mode:
-                continue
-            os.chmod(path, desired_mode)
-            repairs.append(
-                {
-                    "kind": kind,
-                    "path": str(path),
-                    "from": oct(current_mode),
-                    "to": oct(desired_mode),
-                }
-            )
-        except OSError as exc:
-            repairs.append({"kind": kind, "path": str(path), "error": str(exc)})
-    return repairs
+def current_config_dir() -> Path:
+    return current_config_file().parent
+
+
+def get_config_store() -> ConfigStore:
+    return ConfigStore(current_config_file)
+
+
+def get_credential_manager(store: ConfigStore | None = None) -> CredentialManager:
+    return CredentialManager(store or get_config_store())
+
+
+def _raise_storage_error(error: ConfigStoreError | CredentialStoreError) -> None:
+    fail(
+        error.code,
+        error.message,
+        details=getattr(error, "details", None),
+    )
 
 
 def load_config(strict: bool = True, repair_permissions: bool = True) -> dict[str, Any]:
-    if not CONFIG_FILE.exists():
-        return {}
-    if repair_permissions:
-        repair_config_permissions()
     try:
-        payload = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        if not strict:
-            return {}
-        fail(
-            "CONFIG_INVALID",
-            f"Config file is not valid JSON: {CONFIG_FILE}",
-            details={"error": str(exc), "path": str(CONFIG_FILE)},
-        )
-    if not isinstance(payload, dict):
-        if not strict:
-            return {}
-        fail(
-            "CONFIG_INVALID",
-            f"Config file must contain a JSON object: {CONFIG_FILE}",
-            details={"path": str(CONFIG_FILE)},
-        )
-    return payload
+        return get_credential_manager().effective_config(strict=strict)
+    except (ConfigStoreError, CredentialStoreError) as exc:
+        _raise_storage_error(exc)
 
 
 def save_config(cfg: dict[str, Any]) -> None:
-    ensure_config_dir()
-    tmp_file = CONFIG_FILE.with_suffix(".json.tmp")
-    tmp_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.chmod(tmp_file, 0o600)
-    os.replace(tmp_file, CONFIG_FILE)
-    os.chmod(CONFIG_FILE, 0o600)
+    store = get_config_store()
+    try:
+        get_credential_manager(store).replace_effective_config(cfg)
+    except (ConfigStoreError, CredentialStoreError) as exc:
+        _raise_storage_error(exc)
+
+
+def update_config_fields(fields: dict[str, Any]) -> None:
+    try:
+        get_credential_manager().update_config(fields)
+    except (ConfigStoreError, CredentialStoreError) as exc:
+        _raise_storage_error(exc)
 
 
 def remove_zlib_auth(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -353,22 +342,29 @@ def has_zlib_auth(cfg: dict[str, Any]) -> bool:
 
 
 def config_status() -> dict[str, Any]:
-    permission_repairs = repair_config_permissions()
-    cfg = load_config(strict=False, repair_permissions=False)
+    store = get_config_store()
+    manager = get_credential_manager(store)
+    try:
+        storage_status = store.status()
+        cfg = store.load(strict=False)
+        credential_status = manager.status()
+        credential = manager.load() if credential_status["has_credential"] is True else None
+    except (ConfigStoreError, CredentialStoreError) as exc:
+        _raise_storage_error(exc)
     zlib_domain_env = next(
         (os.environ[key] for key in ZLIB_DOMAIN_ENV_KEYS if os.environ.get(key)),
         None,
     )
     payload = {
-        "config_dir": display_path(CONFIG_DIR),
-        "config_file": display_path(CONFIG_FILE),
-        "config_dir_exists": CONFIG_DIR.exists(),
-        "config_file_exists": CONFIG_FILE.exists(),
-        "config_dir_mode": _mode(CONFIG_DIR),
-        "config_file_mode": _mode(CONFIG_FILE),
+        "config_dir": display_path(Path(storage_status["config_dir"])),
+        "config_file": display_path(Path(storage_status["config_file"])),
+        "config_dir_exists": storage_status["config_dir_exists"],
+        "config_file_exists": storage_status["config_file_exists"],
+        "config_dir_mode": storage_status["config_dir_mode"],
+        "config_file_mode": storage_status["config_file_mode"],
         "zlib": {
-            "has_token": has_zlib_auth(cfg),
-            "email": mask_email(cfg.get("email")),
+            "has_token": credential_status["has_credential"] is True,
+            "email": mask_email(credential.email if credential is not None else None),
             "domain": cfg.get("domain"),
             "domain_trusted": bool(cfg.get("domain_trusted")),
             "domain_env": normalize_domain(zlib_domain_env) if zlib_domain_env else None,
@@ -377,9 +373,10 @@ def config_status() -> dict[str, Any]:
             "base_origin": anna_base_origin(),
             "candidate_origins": [url_origin(item) for item in anna_base_urls()],
         },
+        "credential_storage": credential_status,
     }
-    if permission_repairs:
-        payload["permission_repairs"] = permission_repairs
+    if storage_status.get("permission_repairs"):
+        payload["permission_repairs"] = storage_status["permission_repairs"]
     return payload
 
 
@@ -635,10 +632,13 @@ def init_zlibrary(
         )
 
     if update_config and (working != cfg.get("domain") or not cfg.get("domain_trusted")):
-        cfg["domain"] = working
-        cfg["domain_source"] = domain_source(working, checks)
-        cfg["domain_trusted"] = domain_trust_is_persistent(working, checks)
-        save_config(cfg)
+        update_config_fields(
+            {
+                "domain": working,
+                "domain_source": domain_source(working, checks),
+                "domain_trusted": domain_trust_is_persistent(working, checks),
+            }
+        )
 
     z = Zlibrary(
         remix_userid=cfg.get("remix_userid"),
@@ -783,10 +783,13 @@ def search_zlib(
     authenticated = bool(z and z.isLoggedIn())
     if checks and z is not None:
         working = z.getDomain()
-        cfg["domain"] = working
-        cfg["domain_source"] = domain_source(working, checks)
-        cfg["domain_trusted"] = domain_trust_is_persistent(working, checks)
-        save_config(cfg)
+        update_config_fields(
+            {
+                "domain": working,
+                "domain_source": domain_source(working, checks),
+                "domain_trusted": domain_trust_is_persistent(working, checks),
+            }
+        )
 
     books = [
         normalize_zlib_book(book, authenticated=authenticated) for book in result.get("books", [])
@@ -1705,21 +1708,32 @@ def login_zlib(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     user = result["user"]
-    cfg = load_config(strict=False)
-    cfg["remix_userid"] = str(user["id"])
-    cfg["remix_userkey"] = user["remix_userkey"]
-    cfg["domain"] = working
-    cfg["domain_source"] = domain_source(working, checks)
-    cfg["domain_trusted"] = domain_trust_is_persistent(working, checks)
-    cfg["email"] = args.email
-    cfg["name"] = user.get("name", "")
-    save_config(cfg)
+    store = get_config_store()
+    manager = get_credential_manager(store)
+    try:
+        manager.save(
+            Credential(
+                user_id=str(user["id"]),
+                user_key=user["remix_userkey"],
+                email=args.email,
+                name=user.get("name", ""),
+            ),
+            metadata={
+                "domain": working,
+                "domain_source": domain_source(working, checks),
+                "domain_trusted": domain_trust_is_persistent(working, checks),
+            },
+        )
+        storage_status = manager.status()
+    except (ConfigStoreError, CredentialStoreError) as exc:
+        _raise_storage_error(exc)
 
     payload = ok_payload(
         source="zlib",
         authenticated=True,
-        config_file=display_path(CONFIG_FILE),
-        config_file_mode=_mode(CONFIG_FILE),
+        storage=storage_status["selected"],
+        config_file=display_path(store.path),
+        config_file_mode=_mode(store.path),
         user={"name": user.get("name"), "email": mask_email(user.get("email"))},
         domain=working,
     )
@@ -1732,12 +1746,33 @@ def cmd_auth(args: argparse.Namespace) -> dict[str, Any]:
     elif args.auth_command == "login" and args.auth_source == "zlib":
         payload = login_zlib(args)
     elif args.auth_command == "logout":
-        cfg = load_config(strict=False)
-        save_config(remove_zlib_auth(cfg))
+        store = get_config_store()
+        manager = get_credential_manager(store)
+        try:
+            manager.clear()
+            storage_status = manager.status()
+        except (ConfigStoreError, CredentialStoreError) as exc:
+            _raise_storage_error(exc)
         payload = ok_payload(
             source="zlib",
             authenticated=False,
-            config_file=display_path(CONFIG_FILE),
+            storage=storage_status["selected"],
+            config_file=display_path(store.path),
+        )
+    elif args.auth_command == "storage":
+        store = get_config_store()
+        manager = get_credential_manager(store)
+        try:
+            result = manager.migrate(args.storage)
+            credential = manager.load()
+        except (ConfigStoreError, CredentialStoreError) as exc:
+            _raise_storage_error(exc)
+        payload = ok_payload(
+            source="zlib",
+            authenticated=credential is not None,
+            storage=result["storage"],
+            migrated=result["migrated"],
+            config_file=display_path(store.path),
         )
     else:
         fail("INVALID_COMMAND", "Unsupported auth command.")
@@ -1755,8 +1790,11 @@ def cmd_auth(args: argparse.Namespace) -> dict[str, Any]:
         print_human(args, f"Logged in to Z-Library via {payload['domain']}.")
         print_human(
             args,
-            f"Token saved to {payload['config_file']} ({payload['config_file_mode']}).",
+            f"Credentials saved to {payload['storage']} storage.",
         )
+    elif args.auth_command == "storage":
+        action = "Migrated" if payload["migrated"] else "Already using"
+        print_human(args, f"{action} credential storage: {payload['storage']}.")
     else:
         print_human(args, "Z-Library credentials removed from local config.")
     return payload
@@ -2063,6 +2101,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auth_logout = auth_subparsers.add_parser("logout", help="Clear saved Z-Library token")
     add_common(auth_logout)
+    auth_storage = auth_subparsers.add_parser(
+        "storage", help="Select and migrate credential storage"
+    )
+    add_common(auth_storage)
+    auth_storage.add_argument("storage", choices=["file", "system-keychain"])
 
     search_parser = subparsers.add_parser(
         "search",
