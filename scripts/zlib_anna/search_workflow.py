@@ -215,6 +215,28 @@ def score_result(item: Mapping[str, Any], query: str) -> float:
     return score
 
 
+def _matches_request(item: Mapping[str, Any], request: SearchRequest) -> bool:
+    """Apply shared filters after adapter normalization."""
+    wanted_language = (request.lang or "").strip().casefold()
+    if wanted_language:
+        actual = str(item.get("language") or "").casefold()
+        code = re.search(r"\[([a-z]{2,3})\]", actual)
+        code_value = code.group(1) if code else actual
+        if wanted_language not in {actual, code_value}:
+            return False
+    year = item.get("year")
+    if request.year_from is not None and (not isinstance(year, int) or year < request.year_from):
+        return False
+    if request.year_to is not None and (not isinstance(year, int) or year > request.year_to):
+        return False
+    if request.ext:
+        extension = str(item.get("extension") or "").casefold().lstrip(".")
+        wanted = {str(value).casefold().lstrip(".") for value in request.ext}
+        if extension not in wanted:
+            return False
+    return True
+
+
 def _group_key(item: Mapping[str, Any]) -> tuple[str, str, Any]:
     title = " ".join(str(item.get("title") or "").casefold().split())
     author = " ".join(str(item.get("author") or "").casefold().split())
@@ -327,9 +349,10 @@ class SearchWorkflow:
         source_results: dict[str, SearchSourceResult] = {}
         all_items: list[dict[str, Any]] = []
         discarded_late = 0
-        with concurrent.futures.ThreadPoolExecutor(
+        executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=min(self.max_workers, len(names) or 1)
-        ) as executor:
+        )
+        try:
             futures = {
                 executor.submit(_invoke_adapter, self.adapters[name], request, budget, token): name
                 for name in names
@@ -377,10 +400,25 @@ class SearchWorkflow:
                         normalized = [
                             item
                             for item in (normalize_result(raw, name) for raw in (items or []))
-                            if item
+                            if item and _matches_request(item, request)
                         ]
+                        status_value = status.to_dict() if hasattr(status, "to_dict") else status
+                        status_outcome = (
+                            status_value.get("outcome")
+                            if isinstance(status_value, Mapping)
+                            else None
+                        )
+                        status_available = (
+                            status_value.get("available")
+                            if isinstance(status_value, Mapping)
+                            else None
+                        )
+                        outcome = str(
+                            status_outcome
+                            or ("ok" if status_available is not False else "unavailable")
+                        )
                         source_results[name] = SearchSourceResult(
-                            name, normalized, status=status, outcome="ok"
+                            name, normalized, status=status, outcome=outcome
                         )
                         all_items.extend(normalized)
                     except OperationCancelled:
@@ -398,6 +436,11 @@ class SearchWorkflow:
                             message="Source search failed.",
                             details={"error_type": type(exc).__name__},
                         )
+        finally:
+            # A timed-out remote adapter must not hold the workflow hostage.
+            # Its late result is ignored above; the worker may finish in the
+            # background without extending the caller's deadline.
+            executor.shutdown(wait=False, cancel_futures=True)
         # Adapters missing from the selected set have a stable unavailable row.
         for name in names:
             source_results.setdefault(
