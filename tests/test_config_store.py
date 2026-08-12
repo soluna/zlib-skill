@@ -211,18 +211,18 @@ def test_config_store_resolves_its_path_at_runtime_and_roundtrips_atomically(tmp
     ],
 )
 def test_config_store_sanitizes_path_provider_failures(tmp_path, operation):
-    secret = "path-provider-secret"
+    marker = "path-provider-marker"
 
     def failing_provider():
-        raise RuntimeError(secret)
+        raise RuntimeError(marker)
 
     store = ConfigStore(failing_provider)
     with pytest.raises(ConfigStoreError) as raised:
         operation(store)
 
     assert raised.value.code == "CONFIG_PATH_ERROR"
-    assert secret not in str(raised.value)
-    assert secret not in repr(raised.value.details)
+    assert marker not in str(raised.value)
+    assert marker not in repr(raised.value.details)
 
 
 def test_config_store_serializes_thread_updates_without_losing_fields(tmp_path):
@@ -338,16 +338,16 @@ def test_credential_manager_serializes_cross_process_migration_and_login(tmp_pat
 
 def test_config_store_rejects_corrupt_json_without_exposing_its_contents(tmp_path):
     path = tmp_path / "config.json"
-    secret = "token-must-not-escape"
-    path.write_text('{"remix_userkey": "' + secret + '"', encoding="utf-8")
+    marker = "opaque-must-not-escape"
+    path.write_text('{"remix_userkey": "' + marker + '"', encoding="utf-8")
     store = ConfigStore(lambda: path)
 
     try:
         store.load()
     except ConfigStoreError as error:
         assert error.code == "CONFIG_INVALID"
-        assert secret not in str(error)
-        assert secret not in repr(error.details)
+        assert marker not in str(error)
+        assert marker not in repr(error.details)
     else:
         raise AssertionError("corrupt JSON must fail closed")
 
@@ -399,21 +399,21 @@ def test_config_store_reports_directory_at_config_path_as_stable_io_error(tmp_pa
 
 def test_config_store_rejects_invalid_utf8_without_exposing_bytes(tmp_path):
     path = tmp_path / "config.json"
-    path.write_bytes(b'\xff{"remix_userkey":"private-token"}')
+    path.write_bytes(b'\xff{"remix_userkey":"opaque-value"}')
 
     with pytest.raises(ConfigStoreError) as raised:
         ConfigStore(lambda: path).load()
 
     assert raised.value.code == "CONFIG_INVALID"
-    assert "private-token" not in str(raised.value)
+    assert "opaque-value" not in str(raised.value)
     assert ConfigStore(lambda: path).load(strict=False) == {}
 
 
 def test_config_store_sanitizes_mkstemp_failure(tmp_path, monkeypatch):
-    secret = "private-mkstemp-detail"
+    marker = "opaque-mkstemp-detail"
 
     def fail_mkstemp(*_args, **_kwargs):
-        raise PermissionError(secret)
+        raise PermissionError(marker)
 
     monkeypatch.setattr(config_store_module.tempfile, "mkstemp", fail_mkstemp)
 
@@ -421,15 +421,15 @@ def test_config_store_sanitizes_mkstemp_failure(tmp_path, monkeypatch):
         ConfigStore(lambda: tmp_path / "config.json").replace({"token": "value"})
 
     assert raised.value.code == "CONFIG_WRITE_ERROR"
-    assert secret not in str(raised.value)
-    assert secret not in repr(raised.value.details)
+    assert marker not in str(raised.value)
+    assert marker not in repr(raised.value.details)
 
 
 def test_config_store_sanitizes_replace_failure_and_cleans_temporary(tmp_path, monkeypatch):
-    secret = "private-replace-detail"
+    marker = "opaque-replace-detail"
 
     def fail_replace(_source, _target):
-        raise OSError(secret)
+        raise OSError(marker)
 
     monkeypatch.setattr(config_store_module.os, "replace", fail_replace)
     path = tmp_path / "config.json"
@@ -438,15 +438,15 @@ def test_config_store_sanitizes_replace_failure_and_cleans_temporary(tmp_path, m
         ConfigStore(lambda: path).replace({"token": "value"})
 
     assert raised.value.code == "CONFIG_WRITE_ERROR"
-    assert secret not in str(raised.value)
+    assert marker not in str(raised.value)
     assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_config_store_sanitizes_fsync_failure_and_cleans_temporary(tmp_path, monkeypatch):
-    secret = "private-fsync-detail"
+    marker = "opaque-fsync-detail"
 
     def fail_fsync(_descriptor):
-        raise OSError(secret)
+        raise OSError(marker)
 
     monkeypatch.setattr(config_store_module.os, "fsync", fail_fsync)
     path = tmp_path / "config.json"
@@ -455,17 +455,17 @@ def test_config_store_sanitizes_fsync_failure_and_cleans_temporary(tmp_path, mon
         ConfigStore(lambda: path).replace({"token": "value"})
 
     assert raised.value.code == "CONFIG_WRITE_ERROR"
-    assert secret not in str(raised.value)
+    assert marker not in str(raised.value)
     assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_config_store_sanitizes_lock_open_failure(tmp_path, monkeypatch):
-    secret = "private-lock-open-detail"
+    marker = "opaque-lock-open-detail"
     real_open = Path.open
 
     def fail_lock_open(path, *args, **kwargs):
         if path.name == ".config.json.lock":
-            raise OSError(secret)
+            raise OSError(marker)
         return real_open(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", fail_lock_open)
@@ -474,15 +474,15 @@ def test_config_store_sanitizes_lock_open_failure(tmp_path, monkeypatch):
         ConfigStore(lambda: tmp_path / "config.json").load()
 
     assert raised.value.code == "CONFIG_LOCK_ERROR"
-    assert secret not in str(raised.value)
-    assert secret not in repr(raised.value.details)
+    assert marker not in str(raised.value)
+    assert marker not in repr(raised.value.details)
 
 
 def test_config_store_sanitizes_temporary_permission_failure(tmp_path, monkeypatch):
-    secret = "private-write-permission-detail"
+    marker = "opaque-write-permission-detail"
 
     def fail_fchmod(_descriptor, _mode):
-        raise PermissionError(secret)
+        raise PermissionError(marker)
 
     monkeypatch.setattr(config_store_module.os, "fchmod", fail_fchmod)
 
@@ -490,23 +490,23 @@ def test_config_store_sanitizes_temporary_permission_failure(tmp_path, monkeypat
         ConfigStore(lambda: tmp_path / "config.json").replace({"token": "value"})
 
     assert raised.value.code == "CONFIG_WRITE_ERROR"
-    assert secret not in str(raised.value)
+    assert marker not in str(raised.value)
     assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_config_store_sanitizes_serialization_failure(tmp_path):
-    secret = "private-object-representation"
+    marker = "opaque-object-representation"
 
     class Unserializable:
         def __repr__(self):
-            return secret
+            return marker
 
     with pytest.raises(ConfigStoreError) as raised:
         ConfigStore(lambda: tmp_path / "config.json").replace({"token": Unserializable()})
 
     assert raised.value.code == "CONFIG_WRITE_ERROR"
-    assert secret not in str(raised.value)
-    assert secret not in repr(raised.value.details)
+    assert marker not in str(raised.value)
+    assert marker not in repr(raised.value.details)
     assert list(tmp_path.glob("*.tmp")) == []
 
 
@@ -515,11 +515,11 @@ def test_config_transaction_sanitizes_sidecar_delete_failure(tmp_path, monkeypat
     with store.transaction() as transaction:
         transaction.write_sidecar("journal.json", {"phase": "prepare"})
     real_unlink = Path.unlink
-    secret = "private-sidecar-delete-detail"
+    marker = "opaque-sidecar-delete-detail"
 
     def fail_sidecar_unlink(path, *args, **kwargs):
         if path.name == "journal.json":
-            raise OSError(secret)
+            raise OSError(marker)
         return real_unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", fail_sidecar_unlink)
@@ -529,7 +529,7 @@ def test_config_transaction_sanitizes_sidecar_delete_failure(tmp_path, monkeypat
             transaction.delete_sidecar("journal.json")
 
     assert raised.value.code == "CONFIG_WRITE_ERROR"
-    assert secret not in str(raised.value)
+    assert marker not in str(raised.value)
 
 
 def test_file_credential_store_roundtrips_and_deletes_only_credentials(tmp_path):
@@ -554,14 +554,14 @@ def test_file_credential_store_roundtrips_and_deletes_only_credentials(tmp_path)
 
 def test_file_credential_store_rejects_partial_credentials_without_exposure(tmp_path):
     config = ConfigStore(lambda: tmp_path / "config.json")
-    secret = "token-must-not-escape"
-    config.replace({"remix_userkey": secret})
+    marker = "opaque-must-not-escape"
+    config.replace({"remix_userkey": marker})
 
     with pytest.raises(CredentialStoreError) as raised:
         CredentialManager(config).effective_config()
 
     assert raised.value.code == "CREDENTIAL_INVALID"
-    assert secret not in str(raised.value)
+    assert marker not in str(raised.value)
 
 
 def test_system_keychain_capability_comes_from_native_backend():
@@ -664,27 +664,27 @@ def test_system_keychain_production_backend_detects_security_framework():
 
 
 def test_system_keychain_backend_write_error_is_stable_and_sanitized():
-    secret = "token-must-not-escape"
+    marker = "opaque-must-not-escape"
 
     class FailingBackend(_InMemoryKeychainBackend):
         def write(self, service, account, encoded):
-            raise RuntimeError(f"native failure {secret}")
+            raise RuntimeError(f"native failure {marker}")
 
     credentials = SystemKeychainCredentialStore(backend=FailingBackend())
 
     with pytest.raises(CredentialStoreError) as raised:
-        credentials.write(Credential(user_id="42", user_key=secret))
+        credentials.write(Credential(user_id="42", user_key=marker))
 
     assert raised.value.code == "KEYCHAIN_WRITE_FAILED"
-    assert secret not in str(raised.value)
+    assert marker not in str(raised.value)
 
 
 def test_system_keychain_backend_read_error_is_stable_and_sanitized():
-    secret = "token-must-not-escape"
+    marker = "opaque-must-not-escape"
 
     class FailingBackend(_InMemoryKeychainBackend):
         def read(self, service, account):
-            raise RuntimeError(f"native failure {secret}")
+            raise RuntimeError(f"native failure {marker}")
 
     credentials = SystemKeychainCredentialStore(backend=FailingBackend())
 
@@ -692,15 +692,15 @@ def test_system_keychain_backend_read_error_is_stable_and_sanitized():
         credentials.read()
 
     assert raised.value.code == "KEYCHAIN_READ_FAILED"
-    assert secret not in str(raised.value)
+    assert marker not in str(raised.value)
 
 
 def test_system_keychain_backend_delete_error_is_stable_and_sanitized():
-    secret = "token-must-not-escape"
+    marker = "opaque-must-not-escape"
 
     class FailingBackend(_InMemoryKeychainBackend):
         def delete(self, service, account):
-            raise RuntimeError(f"native failure {secret}")
+            raise RuntimeError(f"native failure {marker}")
 
     credentials = SystemKeychainCredentialStore(backend=FailingBackend())
 
@@ -708,7 +708,7 @@ def test_system_keychain_backend_delete_error_is_stable_and_sanitized():
         credentials.delete()
 
     assert raised.value.code == "KEYCHAIN_DELETE_FAILED"
-    assert secret not in str(raised.value)
+    assert marker not in str(raised.value)
 
 
 def test_system_keychain_rejects_non_utf8_native_secret_with_stable_error():
@@ -1309,20 +1309,20 @@ def test_keychain_write_failure_is_sanitized_and_never_falls_back_to_file(tmp_pa
     security = tmp_path / "security"
     security.write_text("fixture", encoding="utf-8")
     security.chmod(0o700)
-    secret = "token-must-not-escape"
+    marker = "opaque-must-not-escape"
 
     class FailingBackend(_InMemoryKeychainBackend):
         def write(self, service, account, encoded):
-            raise RuntimeError(f"private error {secret}")
+            raise RuntimeError(f"opaque error {marker}")
 
     keychain = SystemKeychainCredentialStore(backend=FailingBackend())
 
     with pytest.raises(CredentialStoreError) as raised:
-        CredentialManager(config, keychain=keychain).save(Credential(user_id="42", user_key=secret))
+        CredentialManager(config, keychain=keychain).save(Credential(user_id="42", user_key=marker))
 
     assert raised.value.code == "KEYCHAIN_WRITE_FAILED"
-    assert secret not in str(raised.value)
-    assert secret not in config.path.read_text(encoding="utf-8")
+    assert marker not in str(raised.value)
+    assert marker not in config.path.read_text(encoding="utf-8")
     assert FileCredentialStore(config).read() is None
 
 
