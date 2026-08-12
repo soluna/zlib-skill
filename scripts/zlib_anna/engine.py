@@ -1984,11 +1984,12 @@ def check_anna(
                 trusted_proxy_hosts=trusted_hosts,
             )
             active_budget = budget or operation_budget(args)
-            resp = requests.get(
+            resp = safe_get(
+                requests.Session(),
                 base_url,
                 headers=HEADERS,
                 timeout=active_budget.timeout(15),
-                allow_redirects=False,
+                trusted_proxy_hosts=trusted_hosts,
             )
             available = 200 <= resp.status_code < 300
             if available:

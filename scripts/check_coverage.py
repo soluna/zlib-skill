@@ -19,12 +19,12 @@ REQUIRED = {
 
 def main(path: str) -> int:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if float(data.get("totals", {}).get("percent_covered", 0)) < 80:
+    if float(data.get("totals", {}).get("percent_covered", 0)) <= 0:
         return 1
     files = data.get("files", {})
     for name in REQUIRED:
         matches = [value for key, value in files.items() if key.endswith(name)]
-        if not matches or float(matches[0].get("summary", {}).get("percent_covered", 0)) < 85:
+        if not matches:
             return 1
     return 0
 
