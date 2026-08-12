@@ -6,12 +6,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import venv
-import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
