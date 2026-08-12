@@ -73,8 +73,8 @@ not echo remote text, complete private URLs, or tracebacks.
   mirrors, and captcha behavior.
 - Z-Library 与 Anna 域名可能被封锁、吊销或接管；信任集合需要维护 / Domains may be
   blocked, revoked, or taken over; trust data needs maintenance.
-- Z-Library token 仍是本机明文 JSON，尚未使用系统 keychain / The token remains local
-  plaintext JSON rather than an OS keychain secret.
+- Credentials default to a protected local file and support explicit system-keychain
+  migration; unavailable capabilities and conflicting values fail closed.
 - 首次运行需要 Python 包索引网络；断网用户无法准备依赖 / First use needs package-index
   access; fully offline users cannot prepare dependencies.
 - 默认 CI 不访问真实上游，无法提前发现所有页面变化 / Default CI avoids live services and

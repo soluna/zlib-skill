@@ -138,3 +138,9 @@ not login, search, or download.
   auth status returns schema 2 JSON with no token.
 - 没有全局 `zlib-skill` 命令或 `pipx` 要求 / No global command or pipx requirement.
 - 安装期间没有登录、搜索、下载或凭据读取 / No login, search, download, or credential read.
+## Secure storage and runtime maintenance
+
+Use `auth storage system-keychain` or `auth storage file` for explicit bidirectional
+credential migration. The keychain adapter fails closed when unavailable. Runtime
+maintenance is available as `runtime list`, `runtime health`, `runtime rebuild`, and
+`runtime clean` (clean is dry-run unless `--confirm` is supplied).
