@@ -58,6 +58,10 @@
         "can_download": {"type": "boolean"},
         "can_attempt_download": {"type": "boolean"},
         "status": {"type": "string", "minLength": 1},
+        "outcome": {
+          "type": "string",
+          "enum": ["ok", "unavailable", "timed_out", "cancelled"]
+        },
         "message": {"type": "string"},
         "details": {"type": "object"}
       }
@@ -362,10 +366,37 @@
         {"$ref": "#/$defs/envelope"},
         {
           "type": "object",
-          "required": ["config", "sources", "proxy", "download_dir"],
+          "required": [
+            "config",
+            "sources",
+            "overall_status",
+            "usable",
+            "usable_source_count",
+            "next_actions",
+            "proxy",
+            "download_dir"
+          ],
           "properties": {
             "ok": {"const": true},
             "config": {"type": "object"},
+            "overall_status": {
+              "type": "string",
+              "enum": ["healthy", "degraded", "unavailable"]
+            },
+            "usable": {"type": "boolean"},
+            "usable_source_count": {"type": "integer", "minimum": 0},
+            "next_actions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["code", "source", "message"],
+                "properties": {
+                  "code": {"type": "string", "minLength": 1},
+                  "source": {"type": "string", "minLength": 1},
+                  "message": {"type": "string", "minLength": 1}
+                }
+              }
+            },
             "sources": {
               "type": "array",
               "items": {"$ref": "#/$defs/sourceStatus"}

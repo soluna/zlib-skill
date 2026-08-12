@@ -2030,7 +2030,7 @@ def check_anna(args: argparse.Namespace | None = None) -> SourceStatus:
     )
 
 
-def check_zlib(cfg: dict[str, Any]) -> SourceStatus:
+def check_zlib(cfg: dict[str, Any], budget: OperationBudget | None = None) -> SourceStatus:
     working, checks = find_working_domain(
         cfg.get("domain"),
         preferred_trusted=bool(cfg.get("domain_trusted")),
@@ -2057,7 +2057,7 @@ def check_zlib(cfg: dict[str, Any]) -> SourceStatus:
             )
             authenticated = bool(
                 pooled_zlib_value(
-                    zlib_source_pool(z, operation_budget(seconds=15)),
+                    zlib_source_pool(z, budget or operation_budget(seconds=15)),
                     "doctor_auth",
                     "isLoggedIn",
                 )
@@ -2108,9 +2108,16 @@ def download_dir_status(path: Path = DEFAULT_DOWNLOAD_DIR) -> dict[str, Any]:
 
 
 def cmd_doctor(args: argparse.Namespace) -> dict[str, Any]:
+    budget = operation_budget(args)
     cfg = load_config(strict=False)
     config = config_status()
-    zlib_status = check_zlib(cfg)
+    try:
+        zlib_status = check_zlib(cfg, budget)
+    except TypeError as exc:
+        # Preserve the tiny one-argument checker seam used by older callers.
+        if "positional" not in str(exc) and "argument" not in str(exc):
+            raise
+        zlib_status = check_zlib(cfg)
     anna_status = check_anna(args)
     statuses = [zlib_status, anna_status]
     available_count = sum(1 for status in statuses if status.available)
@@ -2123,9 +2130,21 @@ def cmd_doctor(args: argparse.Namespace) -> dict[str, Any]:
     )
     next_actions = []
     if not zlib_status.available:
-        next_actions.append("Run doctor again after configuring a reachable Z-Library mirror.")
+        next_actions.append(
+            {
+                "code": "CHECK_ZLIB",
+                "source": "zlib",
+                "message": "Configure a reachable Z-Library mirror and run doctor again.",
+            }
+        )
     if not anna_status.available:
-        next_actions.append("Set ANNAS_BASE_URL or configure a reachable proxy.")
+        next_actions.append(
+            {
+                "code": "CHECK_ANNA",
+                "source": "anna",
+                "message": "Set ANNAS_BASE_URL or configure a reachable proxy.",
+            }
+        )
     proxy = {
         "HTTPS_PROXY": bool(os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")),
         "HTTP_PROXY": bool(os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")),
@@ -2136,6 +2155,7 @@ def cmd_doctor(args: argparse.Namespace) -> dict[str, Any]:
         sources=[zlib_status.to_dict(), anna_status.to_dict()],
         overall_status=overall_status,
         usable=available_count > 0,
+        usable_source_count=available_count,
         next_actions=next_actions,
         proxy=proxy,
         download_dir=download_dir_status(),
@@ -2143,6 +2163,11 @@ def cmd_doctor(args: argparse.Namespace) -> dict[str, Any]:
     if args.json:
         emit_json(payload)
     else:
+        print_human(
+            args,
+            f"Doctor overall status: {overall_status} "
+            f"({'usable' if payload['usable'] else 'unavailable'})",
+        )
         print_human(args, json.dumps(payload, ensure_ascii=False, indent=2))
     return payload
 
@@ -2167,6 +2192,7 @@ def cmd_batch(args: argparse.Namespace) -> dict[str, Any]:
 
     results = []
     batch_budget = operation_budget(args)
+    args._operation_budget = batch_budget
     for index, line in enumerate(lines, 1):
         try:
             batch_budget.check()
@@ -2197,8 +2223,22 @@ def cmd_batch(args: argparse.Namespace) -> dict[str, Any]:
                 }
             )
             continue
-        if index > 1 and args.deadline_seconds is not None and args.deadline_seconds <= 0.001:
-            results.append({"index": index, "input": line, "error": {"code": "OPERATION_CANCELLED", "message": "Batch item cancelled after deadline.", "recoverable": True}})
+        if (
+            index > 1
+            and getattr(args, "deadline_seconds", None) is not None
+            and args.deadline_seconds <= 0.001
+        ):
+            results.append(
+                {
+                    "index": index,
+                    "input": line,
+                    "error": {
+                        "code": "OPERATION_CANCELLED",
+                        "message": "Batch item cancelled after deadline.",
+                        "recoverable": True,
+                    },
+                }
+            )
             continue
         parts = line.split()
         try:
@@ -2215,6 +2255,8 @@ def cmd_batch(args: argparse.Namespace) -> dict[str, Any]:
             results.append({"index": index, "input": line, "result": result})
         except SkillError as exc:
             results.append({"index": index, "input": line, "error": exc.to_dict()})
+            if exc.code in {"SOURCE_TIMEOUT", "OPERATION_TIMED_OUT", "DEADLINE_EXCEEDED"}:
+                batch_budget.cancellation.cancel("batch deadline exceeded")
         except Exception as exc:
             results.append(
                 {
