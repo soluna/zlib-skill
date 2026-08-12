@@ -26,7 +26,8 @@ The Skill directory contains all required project-owned components:
 - Agent 工作流：`SKILL.md` / Agent workflow.
 - Agent 元数据：`agents/openai.yaml` / Agent metadata.
 - 启动器：`scripts/run.py` / Bootstrap runner.
-- 执行引擎：`scripts/zlib_anna/` / Deterministic execution engine.
+- 兼容启动包：`scripts/zlib_anna/`；规范实现位于 `plugins/zlib-skill/scripts/zlib_anna/`
+  / Compatibility import package; the canonical deterministic engine lives under the plugin.
 - 带哈希依赖锁：`scripts/requirements.lock` / Hash-locked runtime dependencies.
 
 首次真实命令会在用户缓存目录创建专用虚拟环境。这个内部准备步骤不安装全局命令、不修改系统

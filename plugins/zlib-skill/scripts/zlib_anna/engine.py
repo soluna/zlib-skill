@@ -1944,7 +1944,9 @@ def cmd_auth(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
-def check_anna(args: argparse.Namespace | None = None) -> SourceStatus:
+def check_anna(
+    args: argparse.Namespace | None = None, budget: OperationBudget | None = None
+) -> SourceStatus:
     if not ANNAS_AVAILABLE:
         return SourceStatus(
             "anna",
@@ -1981,12 +1983,13 @@ def check_anna(args: argparse.Namespace | None = None) -> SourceStatus:
                 ),
                 trusted_proxy_hosts=trusted_hosts,
             )
-            budget = operation_budget(args)
+            active_budget = budget or operation_budget(args)
             resp = safe_get(
                 requests,
                 base_url,
                 headers=HEADERS,
-                timeout=budget.timeout(15),
+                timeout=active_budget.timeout(15),
+                trusted_proxy_hosts=trusted_hosts,
             )
             available = 200 <= resp.status_code < 300
             if available:
@@ -2144,7 +2147,10 @@ def cmd_doctor(args: argparse.Namespace) -> dict[str, Any]:
         if "positional" not in str(exc) and "argument" not in str(exc):
             raise
         zlib_status = check_zlib(cfg)
-    anna_status = check_anna(args)
+    try:
+        anna_status = check_anna(args, budget)
+    except TypeError:
+        anna_status = check_anna(args)
     statuses = [zlib_status, anna_status]
     available_count = sum(1 for status in statuses if status.available)
     overall_status = (
