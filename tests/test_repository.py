@@ -27,10 +27,12 @@ REQUIRED_SKILL_FILES = {
     "scripts/requirements.in",
     "scripts/requirements.lock",
     "scripts/zlib_anna/__init__.py",
-    "scripts/zlib_anna/annas_archive.py",
-    "scripts/zlib_anna/engine.py",
-    "scripts/zlib_anna/network_safety.py",
-    "scripts/zlib_anna/zlibrary.py",
+    "plugins/zlib-skill/.codex-plugin/plugin.json",
+    "plugins/zlib-skill/skills/zlib-skill/SKILL.md",
+    "plugins/zlib-skill/scripts/run.py",
+    "plugins/zlib-skill/scripts/zlib_anna/engine.py",
+    "plugins/zlib-skill/scripts/zlib_anna/network_safety.py",
+    "plugins/zlib-skill/scripts/zlib_anna/zlibrary.py",
 }
 
 

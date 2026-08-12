@@ -15,16 +15,27 @@ REQUIRED = {
     "search_workflow.py",
     "download_transaction.py",
 }
+MINIMUM_PERCENT = 85.0
+CANONICAL_PREFIX = "plugins/zlib-skill/scripts/"
 
 
 def main(path: str) -> int:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if float(data.get("totals", {}).get("percent_covered", 0)) <= 0:
+    if float(data.get("totals", {}).get("percent_covered", 0)) < MINIMUM_PERCENT:
         return 1
     files = data.get("files", {})
+    if not any(CANONICAL_PREFIX in key for key in files):
+        return 1
     for name in REQUIRED:
-        matches = [value for key, value in files.items() if key.endswith(name)]
+        matches = [
+            value for key, value in files.items() if key.endswith(name) and CANONICAL_PREFIX in key
+        ]
         if not matches:
+            return 1
+        highest = max(
+            float(value.get("summary", {}).get("percent_covered", 0)) for value in matches
+        )
+        if highest < MINIMUM_PERCENT:
             return 1
     return 0
 
