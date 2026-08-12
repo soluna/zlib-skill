@@ -158,3 +158,9 @@ and `.gd` addresses. User-supplied mirrors still need independent verification.
 
 `zlib-skill` is available under the [MIT License](LICENSE). Third-party attribution is listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+## Operational behavior
+
+Search uses deterministic source-local failover and groups duplicate editions while
+preserving downloadable alternatives. Every remote command accepts a total
+`--deadline-seconds` budget; `doctor --json` distinguishes healthy, degraded, and
+unavailable sources. Installable plugin metadata lives under `plugins/zlib-skill`.

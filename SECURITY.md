@@ -70,3 +70,12 @@ supply-chain issues receive priority.
   `ZLIBRARY_ALLOW_UNTRUSTED_DOMAIN=1` 后的预期访问 / Access explicitly enabled through
   private-network or untrusted-domain opt-ins.
 - 用户主动公开下载内容或链接 / A user intentionally sharing downloads or links.
+## Current safeguards
+
+Remote metadata is bounded and treated as untrusted input. Responses with invalid
+content types, malformed JSON, oversized bodies, unsafe URLs, or invalid identifiers
+are rejected. Downloads use a unique sibling temporary file, destination locking,
+checksum/size validation, and one atomic same-directory commit.
+
+Credentials remain opt-in for the system keychain; capability failures and conflicting
+file/keychain values fail closed without silently writing plaintext tokens.
