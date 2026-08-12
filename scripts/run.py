@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import venv
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -212,8 +213,13 @@ def runtime_entries() -> list[Path]:
     root = runtime_root().expanduser().resolve()
     if not root.exists():
         return []
+    pattern = re.compile(r"^py\d{2,3}-[0-9a-f]{16}$")
     return sorted(
-        (item for item in root.iterdir() if item.is_dir() and not item.is_symlink()),
+        (
+            item
+            for item in root.iterdir()
+            if item.is_dir() and not item.is_symlink() and pattern.fullmatch(item.name)
+        ),
         key=lambda item: item.name,
     )
 
