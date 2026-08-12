@@ -101,11 +101,7 @@ def test_streaming_download_rejects_declared_oversize_before_writing(tmp_path):
         patch("zlib_anna.zlibrary.safe_get", return_value=context),
     ):
         with pytest.raises(ValueError, match="size limit"):
-            z.downloadBookToPath(
-                {"id": "123", "hash": "abc"},
-                output,
-                max_bytes=10,
-            )
+            z.downloadUrlToPath("https://files.example/book.pdf", output, max_bytes=10)
 
     assert not output.exists()
 

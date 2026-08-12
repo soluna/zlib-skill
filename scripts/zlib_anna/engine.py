@@ -1256,6 +1256,8 @@ def download_zlib(args: argparse.Namespace, book_id: str, hash_id: str | None) -
 
     cfg = load_config()
     z = init_zlibrary(cfg, require_auth=True)
+    from .download_transaction import DownloadTransaction
+
     pool = zlib_source_pool(z, operation_budget(args))
 
     info = pooled_zlib_value(pool, "download_info", "getBookInfo", book_id, hash_id)
@@ -1269,34 +1271,29 @@ def download_zlib(args: argparse.Namespace, book_id: str, hash_id: str | None) -
     filename = sanitize_filename(filename, fallback=f"{book_id}.{book.get('extension') or 'book'}")
     output_dir = ensure_output_dir(args.output)
     final_path = unique_path(output_dir / filename)
-    part_path = final_path.with_name(final_path.name + ".part")
 
     bytes_written = 0
     started = time.time()
     size_limit = max_download_bytes(args)
+    transaction = DownloadTransaction(final_path, max_bytes=size_limit)
     for attempt in range(1, DOWNLOAD_RETRY_MAX + 1):
-        if part_path.exists():
-            part_path.unlink()
         try:
             if attempt > 1:
                 _, download_url = pooled_zlib_value(
                     pool, "download_resolve", "getBookDownload", book_id, hash_id
                 )
-            bytes_written = pooled_zlib_value(
-                pool,
-                "download",
-                "downloadUrlToPath",
-                download_url,
-                part_path,
-                max_bytes=size_limit,
+            _, bytes_written, _ = transaction.run(
+                lambda part, url=download_url: pooled_zlib_value(
+                    pool,
+                    "download",
+                    "downloadUrlToPath",
+                    url,
+                    part,
+                    max_bytes=size_limit,
+                )
             )
-            if bytes_written <= 0:
-                raise ValueError("Downloaded file is empty")
-            os.replace(part_path, final_path)
             break
         except Exception as exc:
-            if part_path.exists():
-                part_path.unlink()
             if isinstance(exc, ValueError) and "size limit" in str(exc):
                 fail(
                     "DOWNLOAD_TOO_LARGE",
