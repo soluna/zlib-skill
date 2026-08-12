@@ -208,8 +208,68 @@ def runtime_error_payload(error: RuntimeSetupError) -> dict[str, object]:
     )
 
 
+def runtime_entries() -> list[Path]:
+    root = runtime_root().expanduser().resolve()
+    if not root.exists():
+        return []
+    return sorted(
+        (item for item in root.iterdir() if item.is_dir() and not item.is_symlink()),
+        key=lambda item: item.name,
+    )
+
+
+def runtime_status() -> dict[str, object]:
+    root = runtime_root().expanduser().resolve()
+    current = runtime_path().resolve()
+    entries = []
+    for item in runtime_entries():
+        entries.append(
+            {
+                "name": item.name,
+                "path": str(item),
+                "current": item == current,
+                "ready": runtime_is_ready(item),
+            }
+        )
+    return {"root": str(root), "current": str(current), "entries": entries}
+
+
+def runtime_command(arguments: list[str]) -> int:
+    if not arguments or arguments[0] not in {"list", "health", "rebuild", "clean"}:
+        return -1
+    action = arguments[0]
+    status = runtime_status()
+    if action == "rebuild":
+        target = runtime_path()
+        with runtime_lock(target):
+            build_runtime(target)
+        status = runtime_status()
+    elif action == "clean":
+        confirm = "--confirm" in arguments
+        removed = []
+        for item in runtime_entries():
+            if item.resolve() == runtime_path().resolve() or item.name.startswith("."):
+                continue
+            if confirm:
+                shutil.rmtree(item)
+            removed.append(item.name)
+        status["removed"] = removed
+        status["dry_run"] = not confirm
+    payload = schema.success_envelope(command="runtime", action=action, **status)
+    if "--json" in arguments:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(argv) if argv is not None else sys.argv[1:]
+    runtime_result = runtime_command(
+        arguments[1:] if arguments and arguments[0] == "runtime" else []
+    )
+    if runtime_result >= 0:
+        return runtime_result
     if arguments == ["--version"]:
         print(f"zlib-skill {SKILL_VERSION}")
         return 0
