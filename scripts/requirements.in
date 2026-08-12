@@ -1,2 +1,2 @@
-beautifulsoup4>=4.13,<5
+beautifulsoup4>=4.15.0,<5
 requests>=2.32,<3
