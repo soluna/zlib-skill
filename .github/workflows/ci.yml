@@ -43,7 +43,7 @@ jobs:
 
       - name: Test and coverage
         run: |
-          pytest -q --cov=plugins/zlib-skill/scripts --cov=evals --cov-report=json:/tmp/zlib-coverage.json
+          pytest -q --cov=scripts --cov=evals --cov-report=json:/tmp/zlib-coverage.json
           python scripts/check_coverage.py /tmp/zlib-coverage.json
 
   package:
@@ -110,7 +110,7 @@ jobs:
         run: pip-audit -r scripts/requirements.lock
 
       - name: Run static security checks
-        run: bandit -q -r scripts/run.py scripts/zlib_anna plugins/zlib-skill/scripts evals/run_skill_evals.py -ll
+        run: bandit -q -r scripts/run.py scripts/zlib_anna -ll
 
       - name: Scan tracked files for secrets
         run: |
