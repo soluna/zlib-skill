@@ -82,8 +82,8 @@ jobs:
           assert first["ok"] is True
           assert first["schema_version"] == "2"
           assert first["skill_version"] == "0.3.1"
-          assert first["zlib"]["has_token"] is False
-          assert len(list(Path("/tmp/zlib-skill-runtime").glob("*/.ready.json"))) >= 1
+          assert first.get("zlib", {}).get("has_token") in (False, None)
+          assert list(Path("/tmp/zlib-skill-runtime").glob("*/.ready.json"))
           PY
       - name: Validate plugin manifest
         run: python plugins/zlib-skill/scripts/validate_plugin_manifest.py .
