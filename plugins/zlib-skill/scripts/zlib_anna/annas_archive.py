@@ -35,6 +35,12 @@ from .operation import (
     OriginPool,
     PoolResult,
 )
+from .source_trust import (
+    ALLOW_UNTRUSTED_ANNA_DOMAIN_ENV,
+    KNOWN_FRAUDULENT_ANNA_DOMAINS,
+    OFFICIAL_ANNA_BASE_URLS,
+    validate_anna_base_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +53,7 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-OFFICIAL_BASE_URLS = (
-    "https://annas-archive.gl",
-    "https://annas-archive.pk",
-    "https://annas-archive.gd",
-)
+OFFICIAL_BASE_URLS = OFFICIAL_ANNA_BASE_URLS
 BASE_URL = OFFICIAL_BASE_URLS[0]
 
 # CSS 选择器降级链：从最精确到最宽泛
@@ -292,16 +294,8 @@ class AnnasArchiveClient:
         cancellation: CancellationToken | None = None,
         max_html_bytes: int = DEFAULT_MAX_HTML_BYTES,
     ):
-        self.base_url = (base_url or os.environ.get("ANNAS_BASE_URL") or BASE_URL).rstrip("/")
-        validate_http_url(
-            self.base_url,
-            require_https=not env_flag(
-                ALLOW_INSECURE_HTTP_ENV,
-                PREVIOUS_ALLOW_INSECURE_HTTP_ENV,
-                LEGACY_ALLOW_INSECURE_HTTP_ENV,
-            ),
-            resolve_dns=False,
-        )
+        configured_base_url = base_url or os.environ.get("ANNAS_BASE_URL") or BASE_URL
+        self.base_url = validate_anna_base_url(configured_base_url)
         self.session = requester or requests.Session()
         self.session.headers.update(HEADERS)
         self.budget = budget
@@ -563,6 +557,7 @@ class AnnasArchivePool:
         )
         for origin in origin_values:
             validate_http_url(origin, require_https=require_https, resolve_dns=False)
+            validate_anna_base_url(origin)
         self.pool = OriginPool(
             origin_values,
             source="anna",
@@ -672,6 +667,7 @@ def search_books(
 
 __all__ = [
     "ALLOW_INSECURE_HTTP_ENV",
+    "ALLOW_UNTRUSTED_ANNA_DOMAIN_ENV",
     "AnnaOriginPool",
     "AnnasArchiveClient",
     "AnnasArchivePool",
@@ -679,6 +675,7 @@ __all__ = [
     "BASE_URL",
     "DEFAULT_MAX_HTML_BYTES",
     "MAX_ANNA_HTML_BYTES",
+    "KNOWN_FRAUDULENT_ANNA_DOMAINS",
     "OFFICIAL_BASE_URLS",
     "SELECTOR_CHAIN",
     "AnnaResponseError",

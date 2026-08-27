@@ -108,7 +108,10 @@
                 "candidate_origins": {
                   "type": "array",
                   "items": {"type": "string"}
-                }
+                },
+                "configured_origin": {"type": ["string", "null"]},
+                "configured_trusted": {"type": "boolean"},
+                "configuration_warning": {"type": "string"}
               }
             }
           }

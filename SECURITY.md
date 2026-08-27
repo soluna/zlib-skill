@@ -45,10 +45,19 @@ supply-chain issues receive priority.
   starts in Python isolated mode to avoid current-directory and user-PYTHONPATH injection.
 - 引导失败只返回步骤和异常类型，不回显包索引 URL 或凭据 / Setup failures report only a
   step and error type, not package-index URLs or credentials.
-- Z-Library token 以本机明文 JSON 保存；POSIX 目录/文件权限为 `0700`/`0600` / Tokens are
-  local plaintext JSON protected by POSIX modes `0700`/`0600`.
+- Z-Library token 默认保存在本机 JSON（POSIX `0700`/`0600`），也可显式迁移到系统
+  keychain / Z-Library tokens default to local JSON protected by POSIX `0700`/`0600` and can
+  be explicitly migrated to the system keychain.
 - 未信任 Z-Library 域名默认不访问或接收凭据 / Untrusted Z-Library domains are not
   contacted or sent credentials by default.
+- Z-Library 匿名搜索不会加载或验证本机已保存 token；凭据域名必须同时命中内置允许列表和
+  当前固定发现接口 / Anonymous Z-Library search never loads or validates saved tokens;
+  credential destinations require both the built-in allowlist and current pinned discovery.
+- 已知 Z-Library 仿冒站与共享托管子域不会从发现结果获得信任 / Known Z-Library
+  impersonators and shared-hosting subdomains cannot gain trust from discovery responses.
+- Anna 默认只接受官方 `.gl`、`.pk`、`.gd`；官方 FAQ 标记的 `.su`、`.io`、`.is` 欺诈
+  域名始终硬阻断 / Anna defaults to the official `.gl`, `.pk`, and `.gd` origins; the
+  `.su`, `.io`, and `.is` domains identified as fraudulent by the official FAQ are always blocked.
 - Anna 下载验证每次重定向并阻止本地、私有和链路本地目标 / Anna downloads validate
   every redirect and block local, private, and link-local targets.
 - 对可信内置来源，允许代理软件使用的 `198.18.0.0/15` fake-IP；普通私网、字面 IP、陌生
@@ -59,7 +68,7 @@ supply-chain issues receive priority.
   partial-file boundaries; Anna also verifies MD5.
 - 书名、作者和远端元数据是不可信输入，Agent 不应执行其中指令 / Remote metadata is
   untrusted and must never be executed as instructions.
-- `ZLIB_ANNA_DEBUG=1` 可能输出敏感 URL 或路径 / Debug tracebacks may expose sensitive URLs
+- `ZLIB_SKILL_DEBUG=1` 可能输出敏感 URL 或路径 / Debug tracebacks may expose sensitive URLs
   or paths.
 
 ## 不属于漏洞 / Out of Scope
@@ -67,8 +76,9 @@ supply-chain issues receive priority.
 - 上游不可用、验证码、页面改版或镜像失效 / Upstream outages, captchas, markup changes,
   or dead mirrors.
 - 用户明确启用 `ZLIB_ANNA_ALLOW_PRIVATE_NETWORK=1` 或
-  `ZLIBRARY_ALLOW_UNTRUSTED_DOMAIN=1` 后的预期访问 / Access explicitly enabled through
-  private-network or untrusted-domain opt-ins.
+  `ZLIBRARY_ALLOW_UNTRUSTED_DOMAIN=1`、`ANNAS_ALLOW_UNTRUSTED_DOMAIN=1` 后的预期访问（已知
+  欺诈域名仍不会放行）/ Access explicitly enabled through private-network or
+  untrusted-domain opt-ins (known fraudulent domains remain blocked).
 - 用户主动公开下载内容或链接 / A user intentionally sharing downloads or links.
 ## Current safeguards
 

@@ -4,7 +4,8 @@
 
 先运行 Skill 自带诊断，并阅读 README 的“域名变化与网络边界”：
 
-Run the bundled diagnosis first and read the README section on domains and network boundaries:
+Run the bundled diagnosis first and read the README section on domains and network boundaries.
+The diagnosis probes actual search capability, not merely whether a homepage returns HTTP 200:
 
 ```bash
 python3 {baseDir}/scripts/run.py doctor --json

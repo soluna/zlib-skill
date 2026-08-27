@@ -9,6 +9,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from zlib_anna.network_safety import UnsafeUrlError, safe_get, url_origin, validate_http_url
+from zlib_anna.source_trust import (
+    anna_base_url_policy,
+    validate_anna_base_url,
+    zlib_domain_rejection_reason,
+)
 
 
 def public_dns(*_args, **_kwargs):
@@ -169,3 +174,65 @@ def test_url_origin_removes_path_query_and_fragment():
     assert url_origin("https://files.example/private/token?key=secret#part") == (
         "https://files.example"
     )
+
+
+@pytest.mark.parametrize(
+    "domain",
+    ["z-lib.is", "z-lib.id", "zlibrary.to"],
+)
+def test_known_fraudulent_zlib_domains_are_blocked(domain):
+    assert zlib_domain_rejection_reason(domain) == "known_fraudulent_domain"
+
+
+def test_known_fraudulent_zlib_subdomains_are_blocked():
+    assert zlib_domain_rejection_reason("login.z-lib.id") == "known_fraudulent_domain"
+
+
+def test_shared_hosting_zlib_discovery_domain_is_not_automatically_trusted():
+    assert (
+        zlib_domain_rejection_reason("proxy.zlibraryproxies.workers.dev") == "shared_hosting_domain"
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://annas-archive.su",
+        "https://annas-archive.io",
+        "https://annas-archive.is",
+    ],
+)
+def test_known_fraudulent_anna_domains_remain_blocked_with_opt_in(monkeypatch, url):
+    monkeypatch.setenv("ANNAS_ALLOW_UNTRUSTED_DOMAIN", "1")
+
+    with pytest.raises(UnsafeUrlError):
+        validate_anna_base_url(url)
+
+
+def test_known_fraudulent_anna_subdomains_remain_blocked_with_opt_in(monkeypatch):
+    monkeypatch.setenv("ANNAS_ALLOW_UNTRUSTED_DOMAIN", "1")
+
+    with pytest.raises(UnsafeUrlError):
+        validate_anna_base_url("https://login.annas-archive.su")
+
+
+def test_custom_anna_domain_requires_explicit_opt_in(monkeypatch):
+    monkeypatch.delenv("ANNAS_ALLOW_UNTRUSTED_DOMAIN", raising=False)
+    assert anna_base_url_policy("https://mirror.example")["reason"] == "untrusted_domain"
+
+    monkeypatch.setenv("ANNAS_ALLOW_UNTRUSTED_DOMAIN", "1")
+    policy = anna_base_url_policy("https://mirror.example")
+
+    assert policy["allowed"] is True
+    assert policy["trusted"] is False
+    assert validate_anna_base_url("https://mirror.example") == "https://mirror.example"
+
+
+def test_anna_base_url_rejects_paths_and_queries_even_with_opt_in(monkeypatch):
+    monkeypatch.setenv("ANNAS_ALLOW_UNTRUSTED_DOMAIN", "1")
+
+    policy = anna_base_url_policy("https://mirror.example/private?token=secret")
+
+    assert policy["origin"] == "https://mirror.example"
+    assert policy["allowed"] is False
+    assert policy["reason"] == "base_url_must_be_origin"

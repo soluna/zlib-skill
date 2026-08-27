@@ -44,3 +44,13 @@ def test_coverage_gate_accepts_module_at_threshold(tmp_path):
     path = tmp_path / "coverage.json"
     path.write_text(json.dumps(_coverage_fixture(check_coverage.MINIMUM_PERCENT)))
     assert check_coverage.main(str(path)) == 0
+
+
+def test_coverage_gate_uses_canonical_package_instead_of_duplicate_packaging_total(tmp_path):
+    payload = _coverage_fixture(80)
+    payload["totals"]["percent_covered"] = 50
+    payload["files"]["plugins/zlib-skill/scripts/run.py"] = {"summary": {"percent_covered": 0}}
+    path = tmp_path / "coverage.json"
+    path.write_text(json.dumps(payload))
+
+    assert check_coverage.main(str(path)) == 0

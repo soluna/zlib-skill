@@ -58,8 +58,13 @@ Z-Library 的地址可能变化，Anna's Archive 也可能遇到失效镜像、�
 限制。遇到这些情况，Agent 会说明卡在哪一步，并给出下一步建议，不会把“找到书”冒充成
 “已经下载”。
 
-Skill 会从 Z-Library 的域名发现接口合并可用地址，并在请求失败时继续尝试下一地址；Anna's
-Archive 默认轮换其官方列出的 `.gl`、`.pk`、`.gd` 地址。自定义地址仍需由用户独立核验。
+Skill 会从 Z-Library 的固定发现接口合并可用地址，并在请求失败时继续尝试下一地址。匿名
+搜索不会读取或发送已保存的凭据；登录与下载只会使用“内置允许列表 + 当前发现接口确认”
+同时满足的域名，或用户每次显式授权的自定义域名。
+
+Anna's Archive 默认只轮换其官方 FAQ 当前列出的 `.gl`、`.pk`、`.gd` 地址。FAQ 明确标记
+`.su`、`.io`、`.is` 为欺诈域名，Skill 会硬阻断这些地址，即使打开自定义域名开关也不会
+访问。其他自定义地址默认同样不访问；高级开发配置见故障排查文档。
 
 ## 隐私与使用边界
 
@@ -137,9 +142,15 @@ Z-Library domains can change. Anna's Archive may encounter dead mirrors, captcha
 pages, or network blocking. The agent explains where the attempt stopped and what you can do
 next. It never reports a search result as a completed download.
 
-The Skill merges domains returned by Z-Library's discovery endpoints and retries the next domain
-when a request fails. For Anna's Archive it rotates through the officially listed `.gl`, `.pk`,
-and `.gd` addresses. User-supplied mirrors still need independent verification.
+The Skill merges domains returned by Z-Library's pinned discovery endpoints and retries the next
+domain when a request fails. Anonymous search never loads or sends saved credentials. Login and
+download require both a built-in allowlist match and current discovery confirmation, unless the
+user explicitly opts into a custom domain for that invocation.
+
+For Anna's Archive, the Skill only rotates through the `.gl`, `.pk`, and `.gd` origins currently
+listed in its official FAQ. The FAQ labels `.su`, `.io`, and `.is` fraudulent; the Skill blocks
+them even when custom-domain access is enabled. Other custom origins are also blocked by default;
+see troubleshooting for the development-only override.
 
 ### Privacy and responsible use
 

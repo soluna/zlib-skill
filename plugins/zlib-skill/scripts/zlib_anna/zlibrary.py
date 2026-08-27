@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import requests
 
 from .network_safety import safe_get, validate_http_url
+from .source_trust import zlib_domain_rejection_reason
 
 DEFAULT_TIMEOUT = (10, 60)
 DOWNLOAD_TIMEOUT = (10, 300)
@@ -74,6 +75,9 @@ class Zlibrary:
             or parsed.port is not None
         ):
             raise ValueError("Z-Library domain must be a hostname without a scheme, path, or port")
+        rejection_reason = zlib_domain_rejection_reason(value)
+        if rejection_reason:
+            raise ValueError(f"Z-Library domain is blocked by source policy: {rejection_reason}")
         validate_http_url(f"https://{value}", require_https=True, resolve_dns=False)
         self.__domain = value
 

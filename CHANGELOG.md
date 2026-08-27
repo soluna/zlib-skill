@@ -10,6 +10,17 @@ changes may occur during `0.x`.
 
 ### Fixed / 修复
 
+- `doctor` 改为探测 Anna 实际搜索端点，不再把“首页 200、搜索 403”误报为可用 / Changed
+  `doctor` to probe Anna's real search capability instead of treating a healthy homepage as a
+  usable search service.
+- Z-Library 匿名搜索不再加载或发送已保存凭据；动态域名不能仅凭单个发现响应获得凭据
+  信任 / Prevented anonymous Z-Library search from loading or sending saved credentials and
+  stopped dynamically discovered domains from automatically becoming credential destinations.
+- 硬阻断已知 Z-Library/Anna 仿冒域名，并过滤共享托管发现项；Anna 自定义域名改为显式
+  开发 opt-in / Hard-blocked known Z-Library and Anna impersonators, filtered shared-hosting
+  discovery entries, and made custom Anna origins an explicit development opt-in.
+- Z-Library 发现与探测响应改为有界 JSON 解析并要求候选域名自证 / Added bounded JSON parsing
+  and candidate self-attestation to Z-Library discovery and health probes.
 - Z-Library 搜索改为支持无账号匿名请求；账号仅影响下载与账号功能 / Enabled anonymous
   Z-Library search; authentication now gates downloads and account-only features rather than
   search.

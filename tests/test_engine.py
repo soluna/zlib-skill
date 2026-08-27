@@ -25,6 +25,7 @@ EPUB_MD5 = hashlib.md5(EPUB_BODY, usedforsecurity=False).hexdigest()
 @pytest.fixture(autouse=True)
 def allow_mock_network(monkeypatch):
     monkeypatch.setenv("ZLIB_SKILL_ALLOW_PRIVATE_NETWORK", "1")
+    monkeypatch.setenv("ANNAS_ALLOW_UNTRUSTED_DOMAIN", "1")
 
 
 class FakeResponse:
@@ -382,6 +383,17 @@ def test_config_status_lists_official_anna_fallback_origins(temp_config):
     ]
 
 
+def test_config_status_warns_and_ignores_known_fraudulent_anna_domain(temp_config, monkeypatch):
+    monkeypatch.setenv("ANNAS_BASE_URL", "https://annas-archive.is")
+
+    status = engine.config_status()
+
+    assert status["anna"]["configured_origin"] == "https://annas-archive.is"
+    assert status["anna"]["configured_trusted"] is False
+    assert status["anna"]["configuration_warning"] == "known_fraudulent_domain"
+    assert "https://annas-archive.is" not in status["anna"]["candidate_origins"]
+
+
 def test_mask_email_handles_empty_local_part():
     assert engine.mask_email("@example.com") == "*@example.com"
 
@@ -396,6 +408,12 @@ def test_fetch_domains_filters_unusable_domains():
                 {"domain": "z-library.example", "contentAvailable": True, "isRedirector": False},
                 {"domain": "redirect.example", "contentAvailable": True, "isRedirector": True},
                 {"domain": "offline.example", "contentAvailable": False, "isRedirector": False},
+                {"domain": "z-lib.is", "contentAvailable": True, "isRedirector": False},
+                {
+                    "domain": "proxy.example.workers.dev",
+                    "contentAvailable": True,
+                    "isRedirector": False,
+                },
             ],
         }
         mock_get.return_value = mock_resp
@@ -502,6 +520,48 @@ def test_find_working_domain_reuses_discovery_cache():
 
     assert discovery_cache == {"domains": ["one.example", "two.example"]}
     fetch.assert_called_once_with()
+
+
+def test_credential_domain_requires_built_in_and_live_registry_confirmation(monkeypatch):
+    monkeypatch.delenv("ZLIBRARY_DOMAIN", raising=False)
+    monkeypatch.delenv("ZLIB_DOMAIN", raising=False)
+    with (
+        patch(
+            "zlib_anna.engine.fetch_domains",
+            return_value=["dynamic.example", "z-library.sk"],
+        ),
+        patch("zlib_anna.engine.test_domain", return_value=True) as probe,
+    ):
+        domain, checks = engine.find_working_domain(
+            "dynamic.example",
+            preferred_trusted=True,
+            for_credentials=True,
+        )
+
+    assert domain == "z-library.sk"
+    assert any(
+        item.get("domain") == "dynamic.example" and item.get("reason") == "not_credential_trusted"
+        for item in checks
+    )
+    assert checks[-1]["trust_basis"] == "registry_allowlist"
+    assert checks[-1]["credential_trusted"] is True
+    assert {call.args[0] for call in probe.call_args_list} == {"z-library.sk"}
+    assert engine.domain_trust_is_persistent(domain, checks) is True
+
+
+def test_known_fraudulent_zlib_override_is_never_contacted(monkeypatch):
+    monkeypatch.setenv("ZLIBRARY_DOMAIN", "z-lib.is")
+    monkeypatch.setenv("ZLIBRARY_ALLOW_UNTRUSTED_DOMAIN", "1")
+
+    with (
+        patch("zlib_anna.engine.fetch_domains", return_value=[]),
+        patch("zlib_anna.engine.test_domain", return_value=False) as probe,
+    ):
+        _, checks = engine.find_working_domain(for_credentials=True)
+
+    assert checks[0]["domain"] == "z-lib.is"
+    assert checks[0]["reason"] == "known_fraudulent_domain"
+    assert "z-lib.is" not in {call.args[0] for call in probe.call_args_list}
 
 
 def test_download_dir_status_reports_creatable_when_home_is_missing(tmp_path):
@@ -735,6 +795,43 @@ def test_search_zlib_without_auth_uses_anonymous_search(temp_config):
     )
 
 
+def test_anonymous_zlib_client_never_loads_saved_credentials(temp_config):
+    cfg = {
+        "remix_userid": "42",
+        "remix_userkey": "saved-secret",
+        "domain": "z-library.sk",
+        "domain_trusted": True,
+    }
+    client = MagicMock()
+    client.isLoggedIn.return_value = False
+
+    with patch("zlib_anna.zlibrary.Zlibrary", return_value=client) as constructor:
+        initialized = engine.init_zlibrary(
+            cfg,
+            require_auth=False,
+            update_config=False,
+            resolved_domain="z-library.sk",
+        )
+
+    assert initialized is client
+    constructor.assert_called_once_with()
+    client.setDomain.assert_called_once_with("z-library.sk")
+
+
+def test_authenticated_zlib_client_cannot_bypass_domain_resolution(temp_config):
+    cfg = {"remix_userid": "42", "remix_userkey": "saved-secret"}
+
+    with pytest.raises(engine.SkillError) as raised:
+        engine.init_zlibrary(
+            cfg,
+            require_auth=True,
+            update_config=False,
+            resolved_domain="dynamic.example",
+        )
+
+    assert raised.value.code == "UNTRUSTED_DOMAIN"
+
+
 def test_search_zlib_switches_domain_when_search_request_fails(temp_config):
     args = argparse.Namespace(
         query="python",
@@ -907,6 +1004,29 @@ def test_check_zlib_reports_anonymous_search_without_authentication():
     assert status.details["search_mode"] == "anonymous"
 
 
+def test_check_anna_probes_search_capability_and_reports_access_block(monkeypatch):
+    response = FakeResponse(
+        "https://annas-archive.gl/search?q=zlib-skill-health-check",
+        headers={"content-type": "text/html"},
+        status_code=403,
+    )
+    monkeypatch.setattr(
+        engine,
+        "anna_base_urls",
+        lambda: ["https://annas-archive.gl"],
+    )
+
+    with patch("zlib_anna.engine.safe_get", return_value=response) as request:
+        status = engine.check_anna(budget=engine.operation_budget(seconds=5))
+
+    assert status.available is False
+    assert status.can_search is False
+    assert status.status == "blocked"
+    assert status.details["website_reachable"] is True
+    assert status.details["capability_probe"] == "search"
+    assert request.call_args.args[1].endswith("/search?q=zlib-skill-health-check")
+
+
 def test_search_anna_sanitizes_upstream_failure(monkeypatch):
     args = argparse.Namespace(
         query="private query",
@@ -931,10 +1051,9 @@ def test_search_anna_sanitizes_upstream_failure(monkeypatch):
     assert books == []
     assert status.message == "Anna's Archive request failed."
     assert status.details == {
-        "base_origin": "https://annas.example",
+        "base_origin": "https://annas-archive.gl",
         "error_type": "ConnectionError",
         "failed_origins": [
-            "https://annas.example",
             "https://annas-archive.gl",
             "https://annas-archive.pk",
             "https://annas-archive.gd",

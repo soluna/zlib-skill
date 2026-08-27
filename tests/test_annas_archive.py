@@ -126,6 +126,13 @@ def allow_mock_network(monkeypatch):
     monkeypatch.setenv("ZLIB_SKILL_ALLOW_PRIVATE_NETWORK", "1")
 
 
+def test_client_rejects_known_fraudulent_base_even_with_custom_domain_opt_in(monkeypatch):
+    monkeypatch.setenv("ANNAS_ALLOW_UNTRUSTED_DOMAIN", "1")
+
+    with pytest.raises(ValueError, match="fraudulent"):
+        AnnasArchiveClient(base_url="https://annas-archive.is")
+
+
 @pytest.fixture
 def mock_session():
     """Create a session with a mocked get method."""
