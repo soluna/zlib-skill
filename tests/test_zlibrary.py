@@ -59,6 +59,14 @@ class TestZlibraryDomain:
         with pytest.raises(ValueError):
             Zlibrary().setDomain(domain)
 
+    @pytest.mark.parametrize(
+        "domain",
+        ["z-lib.is", "z-lib.id", "zlibrary.to", "proxy.example.workers.dev"],
+    )
+    def test_set_domain_rejects_service_policy_blocks(self, domain):
+        with pytest.raises(ValueError, match="source policy"):
+            Zlibrary().setDomain(domain)
+
 
 class TestZlibraryInit:
     """Constructor behavior."""

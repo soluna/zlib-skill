@@ -30,6 +30,11 @@ from zlib_anna.zlib_source import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def allow_mock_service_origins(monkeypatch):
+    monkeypatch.setenv("ANNAS_ALLOW_UNTRUSTED_DOMAIN", "1")
+
+
 class Response:
     def __init__(self, body, *, content_type="application/json", content_length=None):
         self.content = body if isinstance(body, bytes) else str(body).encode()

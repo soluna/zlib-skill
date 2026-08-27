@@ -19,22 +19,39 @@ REQUIRED = {
 # intentionally exercised through injected seams.  Keep a realistic repository
 # floor while holding the critical storage/operation modules to the same gate.
 MINIMUM_PERCENT = 70.0
-CANONICAL_PREFIX = "plugins/zlib-skill/scripts/"
+CANONICAL_PREFIX = "plugins/zlib-skill/scripts/zlib_anna/"
+
+
+def canonical_coverage(files: dict) -> float:
+    """Calculate coverage for the single implementation tree, excluding packaging shims."""
+    summaries = [
+        value.get("summary", {}) for key, value in files.items() if CANONICAL_PREFIX in key
+    ]
+    if not summaries:
+        return 0.0
+    statements = sum(int(summary.get("num_statements", 0)) for summary in summaries)
+    if statements:
+        covered = sum(int(summary.get("covered_lines", 0)) for summary in summaries)
+        return covered / statements * 100
+    return sum(float(summary.get("percent_covered", 0)) for summary in summaries) / len(summaries)
 
 
 def main(path: str) -> int:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    total = float(data.get("totals", {}).get("percent_covered", 0))
-    if total < MINIMUM_PERCENT:
-        print(f"coverage total {total:.2f}% is below {MINIMUM_PERCENT:.2f}%", file=sys.stderr)
-        for key, value in sorted(data.get("files", {}).items()):
-            if CANONICAL_PREFIX in key:
-                percent = value.get("summary", {}).get("percent_covered", 0)
-                print(f"  {key}: {percent:.2f}%", file=sys.stderr)
-        return 1
     files = data.get("files", {})
     if not any(CANONICAL_PREFIX in key for key in files):
         print("coverage report has no canonical plugin files", file=sys.stderr)
+        return 1
+    total = canonical_coverage(files)
+    if total < MINIMUM_PERCENT:
+        print(
+            f"canonical package coverage {total:.2f}% is below {MINIMUM_PERCENT:.2f}%",
+            file=sys.stderr,
+        )
+        for key, value in sorted(files.items()):
+            if CANONICAL_PREFIX in key:
+                percent = value.get("summary", {}).get("percent_covered", 0)
+                print(f"  {key}: {percent:.2f}%", file=sys.stderr)
         return 1
     for name in REQUIRED:
         matches = [

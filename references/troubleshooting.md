@@ -20,6 +20,8 @@ python3 {baseDir}/scripts/run.py doctor --json
 ```
 
 Summarize which source is unavailable and what the user can do next. Do not dump the full JSON.
+The check probes an actual search endpoint. `status: blocked` with `website_reachable: true`
+means the homepage is online but automated search is rejected, commonly by an upstream challenge.
 
 ## Login Problems
 
@@ -32,13 +34,18 @@ Summarize which source is unavailable and what the user can do next. Do not dump
 ## Source Address Problems
 
 Z-Library domains can change. The runner merges domains from its pinned discovery endpoints and
-tries verified alternatives automatically. Only ask the user for a manual domain after that pool
-is exhausted. Use `ZLIBRARY_DOMAIN` only with a value they independently verified; never take a
-domain from an arbitrary search result and send credentials to it.
+tries verified alternatives automatically. Anonymous search never loads a saved token. Login,
+download, and account operations require a domain to appear in both the built-in allowlist and the
+current discovery response. Shared-hosting discovery entries are rejected. Only ask the user for
+a manual domain after that pool is exhausted. Use `ZLIBRARY_DOMAIN` only with a value they
+independently verified; never take a domain from an arbitrary search result, email, or social post
+and send credentials to it. Known fraudulent domains remain blocked even with an opt-in.
 
 For Anna's Archive, the runner automatically tries the official `.gl`, `.pk`, and `.gd` origins.
-Suggest a user-verified `ANNAS_BASE_URL`, `HTTPS_PROXY`, or `ALL_PROXY` only when all official
-origins fail.
+Its official FAQ identifies `.su`, `.io`, and `.is` as fraudulent; never suggest them. Prefer
+`HTTPS_PROXY` or `ALL_PROXY` when all official origins fail. A custom origin is development-only,
+must be an origin with no path/query, and requires both `ANNAS_BASE_URL` and the explicit
+`ANNAS_ALLOW_UNTRUSTED_DOMAIN=1` opt-in. Known fraudulent domains remain blocked.
 
 Unknown Z-Library domains require the user's explicit approval before
 `ZLIBRARY_ALLOW_UNTRUSTED_DOMAIN=1`. Private-network and insecure-HTTP overrides also require
